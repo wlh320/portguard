@@ -1,0 +1,35 @@
+[package]
+name = "snowstorm"
+version = "0.3.1"
+edition = "2021"
+authors = ["black-binary <blackbinary@qq.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/black-binary/snowstorm"
+readme = "README.md"
+description = "A minimalistic encryption protocol"
+
+[dependencies]
+snow = "0.9"
+thiserror = "1"
+futures-util = "0.3"
+bytes = { version = "1", optional = true }
+tokio = { version = "1", features = ["io-util"] }
+pin-project = { version = "1", optional = true }
+log = "0.4"
+rand = { version = "0.8", optional = true }
+
+[features]
+default = ["stream", "socket"]
+stream = ["pin-project"]
+socket = ["tokio/rt", "tokio/time", "bytes", "rand"]
+ring-accelerated = ["snow/ring-accelerated"]
+libsodium-accelerated = ["snow/libsodium-accelerated"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+criterion = { version = "0.3", features = ["async_tokio"] }
+
+[[bench]]
+name = "stress"
+harness = false
