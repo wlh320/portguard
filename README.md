@@ -1,14 +1,14 @@
 # portguard
 
-encrypted port forwarding that works like `ssh -L`, but **Zero Config** for client.
+An encrypted port forwarding tool that works like `ssh -L`, but **Zero Config** for client.
 
-It is a simple project and the author is not familiar with security, we take no responsibility for any security flaws. 
+It is currently a simple project and the author is not familiar with security, we take no responsibility for any security flaws. 
 Welcome to create issues and pull requests.
 
 ## Features
 
-- Client binary is auto generated **without any config by hand**, and only generated clients can communicate with server for auth.
-- Every DH key used is auto generated too.
+- Client's binary executable is auto generated from server, user can run it **without any config by hand**, and only generated clients can communicate with server for auth.
+- Every DH key used is auto generated too, without any copy-and-paste of config files.
 
 ## How it works
 
@@ -16,10 +16,10 @@ Welcome to create issues and pull requests.
 client <-> server <-> remote
 ```
 
-1. client listen on local port.
-2. server listen on public port.
-3. client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
-3. proxy local port to remote port set in server config, traffic between client and server is *encrypted*.
+1. Client listens on local port.
+2. Server listens on public port.
+3. Client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
+3. Client's local port is forwarded to remote port by server, and traffic between client and server is *encrypted*.
 
 ## Usage
 
@@ -32,7 +32,7 @@ client <-> server <-> remote
 	remote = '127.0.0.1:1080'
 	```
 
-2. Generate server keypair using `./portguard gen-key -c config.toml`.
+2. Generate server keypair by running `portguard gen-key -c config.toml`.
 
 	After that, `config.toml` becomes:
 	```
@@ -43,7 +43,7 @@ client <-> server <-> remote
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
 	```
 
-2. Generate client binary using `./portguard gen-cli -c config.toml -o pgcli`.
+2. Generate client binary executable by running `portguard gen-cli -c config.toml -o pgcli`.
 
 	After that, `config.toml` becomes:
 	```
@@ -57,24 +57,26 @@ client <-> server <-> remote
 	pubkey = 'KhM4xjza7I8gD7U3uQGuTZ73fIU+Zi66QJzPhmLFJQ0='
 	```
 
-	And a client binary is output to `pgcli`
+	And a client binary executable is output to `pgcli`
 
-3. Server run `./portguard server -c config.toml`
+3. Run `portguard server -c config.toml` on server
 
-4. Client just run `./pgcli` without any configs
+4. Run `./pgcli`  on client without any configs
 (local port can be customized with `./pgcli -p port` if you like).
 
-5. All traffic to client's local port is proxied to remote by server with encryption.
+5. All TCP traffic to client's local port is forwarded to remote by server with encryption.
 
 ## TODO
 
 - [ ] I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake.
 - [ ] Set remote address per client.
 - [ ] Plan to use other Noise implementation.
+- [ ] Improve performance
 
 ## Acknowledgement
 
 Thank for these projects:
 
 - [dend.ro's blog article about self-modify binary](https://blog.dend.ro/self-modifying-rust/), I learned how to modify binary.
-- [Snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream in this project and add some code for timeout when reading from handshake message.
+- [snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream from this project for convenience
+and add some code for timeout when reading from handshake message.
