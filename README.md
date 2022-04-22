@@ -72,7 +72,7 @@ client <-> server <-> remote
 - [ ] Set remote address per client.
 - [ ] Plan to use other Noise implementation.
 
-## Acknowlegement
+## Acknowledgement
 
 Thank for these projects:
 
