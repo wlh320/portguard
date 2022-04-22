@@ -1,6 +1,6 @@
 # portguard
 
-encrypted reverse proxy that works like `ssh -L`, but **Zero Config** for client.
+encrypted port forwarding that works like `ssh -L`, but **Zero Config** for client.
 
 It is a simple project and the author is not familiar with security, we take no responsibility for any security flaws. 
 Welcome to create issues and pull requests.
@@ -12,10 +12,14 @@ Welcome to create issues and pull requests.
 
 ## How it works
 
-1. server listen on public port.
-2. client listen on local port.
-3. handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
-3. proxy local port to remote port set in server config, traffic between server and client is *encrypted*.
+```
+client <-> server <-> remote
+```
+
+1. client listen on local port.
+2. server listen on public port.
+3. client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
+3. proxy local port to remote port set in server config, traffic between client and server is *encrypted*.
 
 ## Usage
 
