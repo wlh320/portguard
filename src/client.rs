@@ -1,5 +1,5 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::proxy::transfer;
+use crate::proxy;
 use futures::FutureExt;
 use log;
 use serde::{Deserialize, Serialize};
@@ -30,15 +30,22 @@ impl Client {
     pub fn new(port: u16) -> Client {
         Client { port }
     }
-    pub async fn run_client_proxy(self) -> Result<(), Box<dyn Error>> {
+    pub async fn run_client_proxy(self, server: Option<SocketAddr>) -> Result<(), Box<dyn Error>> {
         let this = Arc::new(self);
-        let conf: ClientConfig = bincode::deserialize(&CLIENT_CONF_BUF)?;
+        let mut conf: ClientConfig = bincode::deserialize(&CLIENT_CONF_BUF)?;
+        // overwrite server address
+        if let Some(server_addr) = server {
+            conf.server_addr = server_addr;
+        }
         let shared_conf = Arc::new(conf);
         let listen_addr: SocketAddr = format!("127.0.0.1:{}", this.port).parse()?;
         log::info!("Client listening on: {:?}", listen_addr);
         log::info!("Portguard server on: {:?}", shared_conf.server_addr);
         log::info!("Target address: {:?}", shared_conf.target_addr);
-        log::debug!("Portguard server public key: {:?}", base64::encode(&shared_conf.server_pubkey));
+        log::debug!(
+            "Portguard server public key: {:?}",
+            base64::encode(&shared_conf.server_pubkey)
+        );
 
         let listener = TcpListener::bind(listen_addr).await?;
 
@@ -54,7 +61,11 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_connection(&self, inbound: TcpStream, conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
+    async fn handle_connection(
+        &self,
+        inbound: TcpStream,
+        conf: &ClientConfig,
+    ) -> Result<(), Box<dyn Error>> {
         log::info!("New incoming peer_addr {:?}", inbound.peer_addr());
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
@@ -63,7 +74,7 @@ impl Client {
         let outbound = TcpStream::connect(conf.server_addr).await?;
         let enc_outbound = NoiseStream::handshake(outbound, initiator).await?;
 
-        let transfer = transfer(inbound, enc_outbound).map(|r| {
+        let transfer = proxy::transfer(inbound, enc_outbound).map(|r| {
             if let Err(e) = r {
                 log::error!("Transfer error occured. error={}", e);
             }

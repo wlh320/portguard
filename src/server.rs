@@ -1,6 +1,6 @@
 use crate::client::{ClientConfig, CLIENT_CONF_BUF};
 use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::proxy::transfer;
+use crate::proxy;
 
 use futures::FutureExt;
 use log;
@@ -40,6 +40,8 @@ struct ClientEntry {
     /// client public key for auth
     #[serde(with = "base64_serde")]
     pubkey: Vec<u8>,
+    /// client specified remote address
+    remote: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,7 +52,7 @@ pub struct ServerConfig {
     /// server listen port
     #[serde(default = "default_port")]
     pub port: u16,
-    /// remote address hope to proxy
+    /// default remote address hope to proxy
     #[serde(default = "default_remote")]
     remote: String,
     /// server public key
@@ -59,13 +61,13 @@ pub struct ServerConfig {
     /// server private key
     #[serde(with = "base64_serde", default)]
     prikey: Vec<u8>,
-    #[serde(default)]
+    #[serde(serialize_with = "toml::ser::tables_last", default)]
     /// infomation of clients
     clients: HashMap<String, ClientEntry>,
 }
 
 fn default_port() -> u16 {
-    6000
+    8022
 }
 
 fn default_host() -> String {
@@ -73,7 +75,7 @@ fn default_host() -> String {
 }
 
 fn default_remote() -> String {
-    "127.0.0.1:8080".to_string()
+    "127.0.0.1:1080".to_string()
 }
 
 impl ServerConfig {
@@ -97,16 +99,24 @@ impl Server {
         }
     }
     // fn from_config()
-    pub fn gen_client<P: AsRef<Path>>(&mut self, exe_path: P, username: String) -> Result<(), Box<dyn Error>> {
+    pub fn gen_client<P: AsRef<Path>>(
+        &mut self,
+        exe_path: P,
+        username: String,
+        remote: Option<String>,
+    ) -> Result<(), Box<dyn Error>> {
         let mut cli_conf: ClientConfig = bincode::deserialize(&CLIENT_CONF_BUF)?;
         log::debug!("Previous static variable: {:?}", cli_conf);
         // 1. set client config
         let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
         cli_conf.client_prikey = key.private;
-        log::debug!("Client private key: {:?}", base64::encode(&cli_conf.client_prikey));
+        log::debug!(
+            "Client private key: {:?}",
+            base64::encode(&cli_conf.client_prikey)
+        );
         cli_conf.server_pubkey = self.config.pubkey.clone();
         cli_conf.server_addr = format!("{}:{}", self.config.host, self.config.port).parse()?;
-        cli_conf.target_addr = self.config.remote.parse()?;
+        cli_conf.target_addr = remote.as_ref().unwrap_or(&self.config.remote).parse()?;
         log::debug!("New client static variable: {:?}", cli_conf);
         // 2. crate new binary
         let exe = env::current_exe()?;
@@ -130,7 +140,11 @@ impl Server {
             fs::remove_file(&new_exe)?;
         }
         // 4. add new client to server config
-        let client = ClientEntry { name: username, pubkey: key.public };
+        let client = ClientEntry {
+            name: username,
+            pubkey: key.public,
+            remote,
+        };
         let ent = self.config.clients.entry(base64::encode(&client.pubkey));
         ent.or_insert(client);
         // 5. save server config
@@ -151,7 +165,6 @@ impl Server {
     pub async fn run_server_proxy(self) -> Result<(), Box<dyn Error>> {
         let this = Arc::new(self);
         let listen_addr: SocketAddr = format!("0.0.0.0:{}", this.config.port).parse().unwrap();
-        let out_addr: SocketAddr = this.config.remote.parse().unwrap();
         log::info!("Listening on port: {:?}", listen_addr);
 
         let listener = TcpListener::bind(listen_addr).await?;
@@ -159,7 +172,7 @@ impl Server {
         while let Ok((inbound, _)) = listener.accept().await {
             let this = Arc::clone(&this);
             tokio::spawn(async move {
-                if let Err(e) = this.handle_connection(inbound, out_addr).await {
+                if let Err(e) = this.handle_connection(inbound).await {
                     log::warn!("{}", e);
                 }
             });
@@ -167,11 +180,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_connection(
-        &self,
-        inbound: TcpStream,
-        out_addr: SocketAddr,
-    ) -> Result<(), Box<dyn Error>> {
+    async fn handle_connection(&self, inbound: TcpStream) -> Result<(), Box<dyn Error>> {
         log::info!("New incoming peer_addr {:?}", inbound.peer_addr());
         let responder = snowstorm::Builder::new(PATTERN.parse()?)
             .local_private_key(&self.config.prikey)
@@ -181,8 +190,16 @@ impl Server {
             self.config.clients.contains_key(&token)
         })
         .await?;
+        // at this point, client already passed verification
+        // if it specifies a remote address, use it
+        // can use `.unwrap()` here because client must have a static key
+        let token = base64::encode(enc_inbound.get_state().get_remote_static().unwrap());
+        let remote = self.config.clients.get(&token).unwrap().remote.as_ref();
+        let out_addr: SocketAddr = remote.unwrap_or(&self.config.remote).parse()?;
+
+        log::info!("Start proxying {:?} to {:?}", enc_inbound.get_inner().peer_addr(), out_addr);
         let outbound = TcpStream::connect(out_addr).await?;
-        let transfer = transfer(enc_inbound, outbound).map(|r| {
+        let transfer = proxy::transfer(enc_inbound, outbound).map(|r| {
             if let Err(e) = r {
                 log::error!("Transfer error occured. error={}", e);
             }
@@ -195,9 +212,6 @@ impl Server {
 fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], Box<dyn Error>> {
     let v = &bincode::serialize(&conf)?;
     let mut bytes: [u8; CONF_BUF_LEN] = [0; CONF_BUF_LEN];
-    // for i in 0..v.len() {
-        // bytes[i] = v[i];
-    // }
     bytes[..v.len()].clone_from_slice(&v[..]);
     Ok(bytes)
 }

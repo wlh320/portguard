@@ -23,6 +23,9 @@ struct ClientArgs {
     /// local port to listen
     #[clap(short, long, default_value_t = 6000)]
     port: u16,
+    /// replace another server address in this run
+    #[clap(short, long)]
+    server: Option<String>
 }
 
 #[derive(Subcommand)]
@@ -31,21 +34,28 @@ enum Commands {
     Client(ClientArgs),
     /// run server
     Server {
-        /// config file
+        /// location of config file
         #[clap(short, long)]
         config: PathBuf,
     },
     /// generate client binary
     GenCli {
+        /// location of config file
         #[clap(short, long)]
         config: PathBuf,
+        /// location of output binary
         #[clap(short, long)]
         output: PathBuf,
+        /// name of client
         #[clap(short, long, default_value = "user")]
         name: String,
+        /// client specified remote address
+        #[clap(short, long)]
+        remote: Option<String>,
     },
     /// generate keypairs
     GenKey {
+        /// location of config file
         #[clap(short, long)]
         config: PathBuf,
     },
@@ -61,9 +71,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let client_cmd = cli.command.unwrap_or(Commands::Client(cli.client));
     match client_cmd {
-        Commands::Client(ClientArgs { port }) => {
+        Commands::Client(ClientArgs { port, server }) => {
             let client = Client::new(port);
-            client.run_client_proxy().await?;
+            let server = server.and_then(|s| s.parse().ok());
+            client.run_client_proxy(server).await?;
         }
         Commands::Server { config: path } => {
             let content = std::fs::read_to_string(&path)?;
@@ -75,12 +86,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config: path,
             output: out_path,
             name,
+            remote
         } => {
             let content = std::fs::read_to_string(&path)?;
             let config = toml::de::from_str(&content)?;
 
             let mut server = portguard::server::Server::new(config, &path);
-            server.gen_client(out_path, name)?;
+            server.gen_client(out_path, name, remote)?;
         }
         Commands::GenKey { config: path } => {
             let content = std::fs::read_to_string(&path)?;

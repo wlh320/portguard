@@ -27,9 +27,9 @@ client <-> server <-> remote
 
 	Example:
 	```
-	host = '192.168.1.1'
-	port = 6000
-	remote = '127.0.0.1:1080'
+	host = '192.168.1.1'         # host of server
+	port = 8022                  # port of server
+	remote = '127.0.0.1:1080'    # default remote address (can be customized per client)
 	```
 
 2. Generate server keypair by running `portguard gen-key -c config.toml`.
@@ -37,7 +37,7 @@ client <-> server <-> remote
 	After that, `config.toml` becomes:
 	```
 	host = '192.168.1.1'
-	port = 6000
+	port = 8022
 	remote = '127.0.0.1:1080'
 	pubkey = '1y3HW8TDxChtke5nyEdLGj+OkQSg8JjLdalSHzD+aWI='
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
@@ -48,7 +48,7 @@ client <-> server <-> remote
 	After that, `config.toml` becomes:
 	```
 	host = '192.168.1.1'
-	port = 6000
+	port = 8022
 	remote = '127.0.0.1:1080'
 	pubkey = '1y3HW8TDxChtke5nyEdLGj+OkQSg8JjLdalSHzD+aWI='
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
@@ -61,15 +61,15 @@ client <-> server <-> remote
 
 3. Run `portguard server -c config.toml` on server
 
-4. Run `./pgcli`  on client without any configs
-(local port can be customized with `./pgcli -p port` if you like).
+4. Run `pgcli` on client without any configs
+(local port or server address can be customized with `./pgcli -p port -s saddr:sport` if you like).
 
 5. All TCP traffic to client's local port is forwarded to remote by server with encryption.
 
 ## TODO
 
 - [ ] I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake.
-- [ ] Set remote address per client.
+- [x] Set remote address per client.
 - [ ] Plan to use other Noise implementation.
 - [ ] Improve performance
 
