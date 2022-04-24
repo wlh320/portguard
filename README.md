@@ -62,7 +62,7 @@ client <-> server <-> remote
 3. Run `portguard server -c config.toml` on server
 
 4. Run `pgcli` on client without any configs
-(local port or server address can be customized with `./pgcli -p port -s saddr:sport` if you like).
+(local port or server address can be customized with `pgcli -p port -s saddr:sport` if you like).
 
 5. All TCP traffic to client's local port is forwarded to remote by server with encryption.
 
