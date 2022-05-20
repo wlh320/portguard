@@ -1,9 +1,12 @@
 # portguard
 
-An encrypted port forwarding tool that works like `ssh -L`, but **Zero Config** for client.
+An encrypted port forwarding tool that works like `ssh -L` and `ssh -D`, but **Zero Config** for client.
 
-It is currently a simple project and the author is not familiar with security, we take no responsibility for any security flaws. 
+It is currently a simple project and the author is not familiar with security, we take no responsibility for any security flaws.
+
 Welcome to create issues and pull requests.
+
+[中文介绍](https://github.com/wlh320/portguard/blob/master/README_zh.md)
 
 ## Features
 
@@ -18,8 +21,9 @@ client <-> server <-> remote
 
 1. Client listens on local port.
 2. Server listens on public port.
-3. Client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
-3. Client's local port is forwarded to remote port by server, and traffic between client and server is *encrypted*.
+3. Remote can be a remote port (google.com:443), server's local port (127.0.0.1:xxxx), or dynamic (using a built-in SOCKS5 server).
+4. Client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
+5. Client's local port is forwarded to remote port by server, and traffic between client and server is *encrypted*.
 
 ## Usage
 
@@ -29,7 +33,8 @@ client <-> server <-> remote
 	```
 	host = '192.168.1.1'         # host of server
 	port = 8022                  # port of server
-	remote = '127.0.0.1:1080'    # default remote address (can be customized per client)
+	remote = '127.0.0.1:1080'    # default static remote (can be customized per client)
+	# remote = 'socks5'          # or use dynamic remote
 	```
 
 2. Generate server keypair by running `portguard gen-key -c config.toml`.
@@ -70,13 +75,23 @@ client <-> server <-> remote
 
 - [ ] I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake.
 - [x] Set remote address per client.
-- [ ] Plan to use other Noise implementation.
-- [ ] Improve performance
+- [ ] Improve performance.
+- [ ] Test.
+
+## Changelog
+
+### v0.2.0
+- add `ssh -D` feature with a built-in SOCKS5 server
+- can overwrite config of existing client
+
+### v0.1.0
+- basic `ssh -L` feature
 
 ## Acknowledgement
 
-Thank for these projects:
+Thanks for these projects:
 
 - [dend.ro's blog article about self-modify binary](https://blog.dend.ro/self-modifying-rust/), I learned how to modify binary.
 - [snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream from this project for convenience
 and add some code for timeout when reading from handshake message.
+- [fast-socks5](https://github.com/dizda/fast-socks5), I use Socks5Socket from this library as a built-in SOCKS5 server.

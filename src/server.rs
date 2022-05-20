@@ -1,7 +1,10 @@
 use crate::client::{ClientConfig, CLIENT_CONF_BUF};
 use crate::consts::{CONF_BUF_LEN, PATTERN};
 use crate::proxy;
+use crate::remote::Remote;
 
+use bincode::Options;
+use fast_socks5::server::Socks5Socket;
 use futures::FutureExt;
 use log;
 use memmap2::MmapOptions;
@@ -9,7 +12,6 @@ use object::{File, Object, ObjectSection};
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
 use std::collections::HashMap;
-use std::env;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::net::SocketAddr;
@@ -41,7 +43,7 @@ struct ClientEntry {
     #[serde(with = "base64_serde")]
     pubkey: Vec<u8>,
     /// client specified remote address
-    remote: Option<String>,
+    remote: Option<Remote>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,7 +56,7 @@ pub struct ServerConfig {
     pub port: u16,
     /// default remote address hope to proxy
     #[serde(default = "default_remote")]
-    remote: String,
+    remote: Remote,
     /// server public key
     #[serde(with = "base64_serde", default)]
     pubkey: Vec<u8>,
@@ -74,8 +76,8 @@ fn default_host() -> String {
     "192.168.1.1".to_string()
 }
 
-fn default_remote() -> String {
-    "127.0.0.1:1080".to_string()
+fn default_remote() -> Remote {
+    Remote::Socks5
 }
 
 impl ServerConfig {
@@ -86,6 +88,7 @@ impl ServerConfig {
     }
 }
 
+/// Portguard server
 pub struct Server {
     config_path: PathBuf,
     config: ServerConfig,
@@ -98,47 +101,49 @@ impl Server {
             config_path: path.to_owned(),
         }
     }
-    // fn from_config()
     pub fn gen_client<P: AsRef<Path>>(
         &mut self,
-        exe_path: P,
+        in_path: P,
+        out_path: P,
         username: String,
-        remote: Option<String>,
+        remote: Option<Remote>,
     ) -> Result<(), Box<dyn Error>> {
-        let mut cli_conf: ClientConfig = bincode::deserialize(&CLIENT_CONF_BUF)?;
-        log::debug!("Previous static variable: {:?}", cli_conf);
+        // let mut cli_conf: ClientConfig = bincode::deserialize(&CLIENT_CONF_BUF)?;
+        let mut cli_conf: ClientConfig = bincode::options()
+            .with_limit(CONF_BUF_LEN as u64)
+            .allow_trailing_bytes()
+            .deserialize(&CLIENT_CONF_BUF)
+            .unwrap();
         // 1. set client config
         let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
         cli_conf.client_prikey = key.private;
-        log::debug!(
-            "Client private key: {:?}",
-            base64::encode(&cli_conf.client_prikey)
-        );
         cli_conf.server_pubkey = self.config.pubkey.clone();
         cli_conf.server_addr = format!("{}:{}", self.config.host, self.config.port).parse()?;
-        cli_conf.target_addr = remote.as_ref().unwrap_or(&self.config.remote).parse()?;
-        log::debug!("New client static variable: {:?}", cli_conf);
+        cli_conf.target_addr = remote.unwrap_or(self.config.remote).to_string();
+
         // 2. crate new binary
-        let exe = env::current_exe()?;
-        let new_exe = exe.with_extension("tmp");
-        fs::copy(&exe, &new_exe)?;
+        let new_exe = in_path.as_ref().with_extension("tmp");
+        fs::copy(&in_path, &new_exe)?;
         let file = OpenOptions::new().read(true).write(true).open(&new_exe)?;
         let mut buf = unsafe { MmapOptions::new().map_mut(&file) }?;
         let file = File::parse(&*buf)?;
+
         // 3. save config to new binary
         if let Some(range) = get_section(&file, "modify") {
+            log::debug!("Copying config to client");
             assert_eq!(range.1, CONF_BUF_LEN as u64);
 
             let conf_buf = serialize_conf_to_buf(&cli_conf)?;
             let base = range.0 as usize;
             buf[base..(base + CONF_BUF_LEN)].copy_from_slice(&conf_buf);
 
-            let perms = fs::metadata(&exe)?.permissions();
+            let perms = fs::metadata(in_path)?.permissions();
             fs::set_permissions(&new_exe, perms)?;
-            fs::rename(&new_exe, exe_path)?;
+            fs::rename(&new_exe, out_path)?;
         } else {
             fs::remove_file(&new_exe)?;
         }
+
         // 4. add new client to server config
         let client = ClientEntry {
             name: username,
@@ -194,23 +199,51 @@ impl Server {
         // if it specifies a remote address, use it
         // can use `.unwrap()` here because client must have a static key
         let token = base64::encode(enc_inbound.get_state().get_remote_static().unwrap());
-        let remote = self.config.clients.get(&token).unwrap().remote.as_ref();
-        let out_addr: SocketAddr = remote.unwrap_or(&self.config.remote).parse()?;
+        let client_remote = self.config.clients.get(&token).unwrap().remote;
+        let remote = client_remote.unwrap_or(self.config.remote);
 
-        log::info!("Start proxying {:?} to {:?}", enc_inbound.get_inner().peer_addr(), out_addr);
-        let outbound = TcpStream::connect(out_addr).await?;
-        let transfer = proxy::transfer(enc_inbound, outbound).map(|r| {
-            if let Err(e) = r {
-                log::error!("Transfer error occured. error={}", e);
+        match remote {
+            Remote::Addr(out_addr) => {
+                log::info!(
+                    "Start proxying {:?} to {:?}",
+                    enc_inbound.get_inner().peer_addr(),
+                    out_addr
+                );
+                let outbound = TcpStream::connect(out_addr).await?;
+                let transfer = proxy::transfer(enc_inbound, outbound).map(|r| {
+                    if let Err(e) = r {
+                        log::error!("Transfer error occured. error={}", e);
+                    }
+                });
+                transfer.await;
             }
-        });
-        transfer.await;
+            Remote::Socks5 => {
+                log::info!(
+                    "Start proxying {:?} to built-in socks5 server",
+                    enc_inbound.get_inner().peer_addr(),
+                );
+
+                let socks5_config = fast_socks5::server::Config::default();
+                let config = Arc::new(socks5_config);
+                let socket = Socks5Socket::new(enc_inbound, config);
+                let transfer = socket.upgrade_to_socks5().map(|r| {
+                    if let Err(e) = r {
+                        log::error!("Transfer error occured. error={}", e);
+                    }
+                });
+                transfer.await;
+            }
+        }
         Ok(())
     }
 }
 
 fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], Box<dyn Error>> {
-    let v = &bincode::serialize(&conf)?;
+    let v = bincode::options()
+        .with_limit(CONF_BUF_LEN as u64)
+        .allow_trailing_bytes()
+        .serialize(&conf)?;
+    // let v = &bincode::serialize(&conf)?;
     let mut bytes: [u8; CONF_BUF_LEN] = [0; CONF_BUF_LEN];
     bytes[..v.len()].clone_from_slice(&v[..]);
     Ok(bytes)

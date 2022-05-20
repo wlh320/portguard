@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use portguard::client::Client;
 use portguard::server::{Server, ServerConfig};
+use portguard::Remote;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
@@ -25,7 +26,7 @@ struct ClientArgs {
     port: u16,
     /// replace another server address in this run
     #[clap(short, long)]
-    server: Option<String>
+    server: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -43,6 +44,9 @@ enum Commands {
         /// location of config file
         #[clap(short, long)]
         config: PathBuf,
+        /// location of input binary (current binary by default)
+        #[clap(short, long)]
+        input: Option<PathBuf>,
         /// location of output binary
         #[clap(short, long)]
         output: PathBuf,
@@ -51,7 +55,7 @@ enum Commands {
         name: String,
         /// client specified remote address
         #[clap(short, long)]
-        remote: Option<String>,
+        remote: Option<Remote>,
     },
     /// generate keypairs
     GenKey {
@@ -61,13 +65,7 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "info")
-    }
-    env_logger::init();
-
+async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let client_cmd = cli.command.unwrap_or(Commands::Client(cli.client));
     match client_cmd {
@@ -84,15 +82,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Commands::GenCli {
             config: path,
+            input: in_path,
             output: out_path,
             name,
-            remote
+            remote,
         } => {
+            let in_path = in_path.unwrap_or(env::current_exe()?);
             let content = std::fs::read_to_string(&path)?;
             let config = toml::de::from_str(&content)?;
 
             let mut server = portguard::server::Server::new(config, &path);
-            server.gen_client(out_path, name, remote)?;
+            server.gen_client(in_path, out_path, name, remote)?;
         }
         Commands::GenKey { config: path } => {
             let content = std::fs::read_to_string(&path)?;
@@ -103,4 +103,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "info")
+    }
+    env_logger::init();
+    run().await.map_err(|e| {
+        log::error!("{:?}", e);
+        e
+    })
 }

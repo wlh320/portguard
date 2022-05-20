@@ -122,8 +122,8 @@ where
                 inner.flush().await?;
             } else {
                 let len = match timeout(READ_TIMEOUT, inner.read_u16_le()).await {
-                    Ok(r) => { r? },
-                    Err(e) => return Err(SnowstormError::ReadTimeout(e.to_string()))
+                    Ok(r) => r?,
+                    Err(e) => return Err(SnowstormError::ReadTimeout(e.to_string())),
                 } as usize;
                 if let Err(e) = timeout(READ_TIMEOUT, inner.read_exact(&mut message[..len])).await {
                     // inner.shutdown().await?;
@@ -308,7 +308,7 @@ where
                     let read_buf_remaining = read_buf.remaining();
                     let buf_remaining = read_payload_buffer.len() - *start;
                     if buf_remaining <= read_buf_remaining {
-                        read_buf.put_slice(read_payload_buffer);
+                        read_buf.put_slice(&read_payload_buffer[*start..]);
                         *state = ReadState::Idle;
                     } else {
                         read_buf

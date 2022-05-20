@@ -1,5 +1,6 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
 use crate::proxy;
+use bincode::Options;
 use futures::FutureExt;
 use log;
 use serde::{Deserialize, Serialize};
@@ -9,10 +10,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 
+/// client's builtin config, will be serialized to bincode
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub server_addr: SocketAddr,
-    pub target_addr: SocketAddr,
+    pub target_addr: String, // only for print in log
     pub server_pubkey: Vec<u8>,
     pub client_prikey: Vec<u8>,
 }
@@ -32,7 +34,11 @@ impl Client {
     }
     pub async fn run_client_proxy(self, server: Option<SocketAddr>) -> Result<(), Box<dyn Error>> {
         let this = Arc::new(self);
-        let mut conf: ClientConfig = bincode::deserialize(&CLIENT_CONF_BUF)?;
+        let mut conf: ClientConfig = bincode::options()
+            .with_limit(CONF_BUF_LEN as u64)
+            .allow_trailing_bytes()
+            .deserialize(&CLIENT_CONF_BUF)?;
+
         // overwrite server address
         if let Some(server_addr) = server {
             conf.server_addr = server_addr;
@@ -50,8 +56,8 @@ impl Client {
         let listener = TcpListener::bind(listen_addr).await?;
 
         while let Ok((inbound, _)) = listener.accept().await {
-            let this = Arc::clone(&this);
-            let conf = Arc::clone(&shared_conf);
+            let this = this.clone();
+            let conf = shared_conf.clone();
             tokio::spawn(async move {
                 if let Err(e) = this.handle_connection(inbound, &conf).await {
                     log::warn!("{}", e);
