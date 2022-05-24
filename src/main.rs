@@ -15,7 +15,7 @@ struct Cli {
     command: Option<Commands>,
 
     #[clap(flatten)]
-    /// run client, default command
+    /// Run client, default command
     client: ClientArgs,
 }
 
@@ -24,22 +24,22 @@ struct ClientArgs {
     /// local port to listen
     #[clap(short, long, default_value_t = 6000)]
     port: u16,
-    /// replace another server address in this run
+    /// use another server address in this run
     #[clap(short, long)]
     server: Option<String>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// run client
+    /// Run client
     Client(ClientArgs),
-    /// run server
+    /// Run server
     Server {
         /// location of config file
         #[clap(short, long)]
         config: PathBuf,
     },
-    /// generate client binary
+    /// Generate client binary
     GenCli {
         /// location of config file
         #[clap(short, long)]
@@ -57,12 +57,18 @@ enum Commands {
         #[clap(short, long)]
         remote: Option<Remote>,
     },
-    /// generate keypairs
+    /// Generate keypairs
     GenKey {
         /// location of config file
         #[clap(short, long)]
         config: PathBuf,
     },
+    /// List client pubkey in client config
+    ListKey {
+        /// if set this flag, then also list server pubkey
+        #[clap(short, long)]
+        server: bool
+    }
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
@@ -100,6 +106,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
             let mut server = portguard::server::Server::new(config, &path);
             server.gen_key()?;
+        }
+        Commands::ListKey { server } => {
+            Client::list_pubkey(server)?;
         }
     }
     Ok(())

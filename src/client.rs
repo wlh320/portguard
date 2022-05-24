@@ -1,6 +1,7 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
 use crate::proxy;
 use bincode::Options;
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use futures::FutureExt;
 use log;
 use serde::{Deserialize, Serialize};
@@ -19,12 +20,14 @@ pub struct ClientConfig {
     pub client_prikey: Vec<u8>,
 }
 
-#[link_section = "modify"]
+#[cfg_attr(target_os = "linux", link_section = ".portguard")]
+#[cfg_attr(target_os = "windows", link_section = "pgmodify")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__portguard")]
 #[used]
 pub static CLIENT_CONF_BUF: [u8; CONF_BUF_LEN] = [0; CONF_BUF_LEN];
 
 pub struct Client {
-    /// loal port to listen
+    /// local port to listen
     port: u16,
 }
 
@@ -86,6 +89,24 @@ impl Client {
             }
         });
         transfer.await;
+        Ok(())
+    }
+
+    pub fn list_pubkey(server: bool) -> Result<(), Box<dyn Error>> {
+        let conf: ClientConfig = bincode::options()
+            .with_limit(CONF_BUF_LEN as u64)
+            .allow_trailing_bytes()
+            .deserialize(&CLIENT_CONF_BUF)?;
+
+        // derive pubkey
+        let privkey = Scalar::from_bits(conf.client_prikey.try_into().unwrap());
+        let point = (&ED25519_BASEPOINT_TABLE * &privkey).to_montgomery();
+        let pubkey = base64::encode(point.to_bytes());
+        println!("Client pubkey: {:?}", pubkey);
+        if server {
+            let key = base64::encode(conf.server_pubkey);
+            println!("Server pubkey: {:?}", key);
+        }
         Ok(())
     }
 }

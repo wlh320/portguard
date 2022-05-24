@@ -80,6 +80,12 @@ client <-> server <-> remote
 
 ## Changelog
 
+### v0.2.1`
+- add x86_64-apple-darwin support (not tested)
+- regularize section name
+- server can generate client for any platform (windows, linux, macos)
+- client can derive its public key using list-key subcommand
+
 ### v0.2.0
 - add `ssh -D` feature with a built-in SOCKS5 server
 - can overwrite config of existing client

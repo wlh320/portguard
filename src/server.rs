@@ -8,7 +8,7 @@ use fast_socks5::server::Socks5Socket;
 use futures::FutureExt;
 use log;
 use memmap2::MmapOptions;
-use object::{File, Object, ObjectSection};
+use object::{BinaryFormat, File, Object, ObjectSection};
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
 use std::collections::HashMap;
@@ -129,7 +129,7 @@ impl Server {
         let file = File::parse(&*buf)?;
 
         // 3. save config to new binary
-        if let Some(range) = get_section(&file, "modify") {
+        if let Some(range) = get_client_config_section(&file) {
             log::debug!("Copying config to client");
             assert_eq!(range.1, CONF_BUF_LEN as u64);
 
@@ -249,7 +249,13 @@ fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], Box<
     Ok(bytes)
 }
 
-fn get_section(file: &File, name: &str) -> Option<(u64, u64)> {
+fn get_client_config_section(file: &File) -> Option<(u64, u64)> {
+    let name = match file.format() {
+        BinaryFormat::Elf => ".portguard",
+        BinaryFormat::Pe => "pgmodify",
+        BinaryFormat::MachO => "__DATA,__portguard",
+        _ => todo!(),
+    };
     for section in file.sections() {
         match section.name() {
             Ok(n) if n == name => {
