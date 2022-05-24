@@ -80,8 +80,8 @@ client <-> server <-> remote
 
 ## Changelog
 
-### v0.2.1`
-- add x86_64-apple-darwin support (not tested)
+### v0.2.1
+- add `x86_64-apple-darwin` support (not tested)
 - regularize section name
 - server can generate client for any platform (windows, linux, macos)
 - client can derive its public key using list-key subcommand
