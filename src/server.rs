@@ -253,7 +253,7 @@ fn get_client_config_section(file: &File) -> Option<(u64, u64)> {
     let name = match file.format() {
         BinaryFormat::Elf => ".portguard",
         BinaryFormat::Pe => "pgmodify",
-        BinaryFormat::MachO => "__DATA,__portguard",
+        BinaryFormat::MachO => "__portguard",
         _ => todo!(),
     };
     for section in file.sections() {
