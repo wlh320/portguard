@@ -20,6 +20,8 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.5.9"
 base64 = "0.13.0"
 curve25519-dalek = "4.0.0-pre.2" # for deriving pubkey from prikey
+yamux = "0.10.1" # for impl reverse proxy
+tokio-util = { version = "0.7.2", features = ["compat"] }
 
 [profile.release]
 strip = true

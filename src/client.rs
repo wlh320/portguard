@@ -10,6 +10,9 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
+use tokio_util::compat::{
+    FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt,
+};
 
 /// client's builtin config, will be serialized to bincode
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,7 +38,12 @@ impl Client {
     pub fn new(port: u16) -> Client {
         Client { port }
     }
-    pub async fn run_client_proxy(self, server: Option<SocketAddr>) -> Result<(), Box<dyn Error>> {
+
+    /// normal client
+    pub async fn run_client_proxy(
+        self,
+        server_addr: Option<SocketAddr>,
+    ) -> Result<(), Box<dyn Error>> {
         let this = Arc::new(self);
         let mut conf: ClientConfig = bincode::options()
             .with_limit(CONF_BUF_LEN as u64)
@@ -43,8 +51,8 @@ impl Client {
             .deserialize(&CLIENT_CONF_BUF)?;
 
         // overwrite server address
-        if let Some(server_addr) = server {
-            conf.server_addr = server_addr;
+        if let Some(addr) = server_addr {
+            conf.server_addr = addr;
         }
         let shared_conf = Arc::new(conf);
         let listen_addr: SocketAddr = format!("127.0.0.1:{}", this.port).parse()?;
@@ -62,7 +70,7 @@ impl Client {
             let this = this.clone();
             let conf = shared_conf.clone();
             tokio::spawn(async move {
-                if let Err(e) = this.handle_connection(inbound, &conf).await {
+                if let Err(e) = this.handle_client_connection(inbound, &conf).await {
                     log::warn!("{}", e);
                 }
             });
@@ -70,7 +78,7 @@ impl Client {
         Ok(())
     }
 
-    async fn handle_connection(
+    async fn handle_client_connection(
         &self,
         inbound: TcpStream,
         conf: &ClientConfig,
@@ -84,6 +92,73 @@ impl Client {
         let enc_outbound = NoiseStream::handshake(outbound, initiator).await?;
 
         let transfer = proxy::transfer(inbound, enc_outbound).map(|r| {
+            if let Err(e) = r {
+                log::error!("Transfer error occured. error={}", e);
+            }
+        });
+        transfer.await;
+        Ok(())
+    }
+
+    /// TODO: impl reverse client
+    pub async fn run_reverse_client_proxy(
+        self,
+        server_addr: Option<SocketAddr>,
+    ) -> Result<(), Box<dyn Error>> {
+        let this = Arc::new(self);
+        let mut conf: ClientConfig = bincode::options()
+            .with_limit(CONF_BUF_LEN as u64)
+            .allow_trailing_bytes()
+            .deserialize(&CLIENT_CONF_BUF)?;
+
+        // overwrite server address
+        if let Some(addr) = server_addr {
+            conf.server_addr = addr;
+        }
+        let shared_conf = Arc::new(conf);
+        let expose_addr: SocketAddr = format!("127.0.0.1:{}", this.port).parse()?;
+        log::info!("Client exposing service on: {:?}", expose_addr);
+        log::info!("Portguard server on: {:?}", shared_conf.server_addr);
+        log::debug!(
+            "Portguard server public key: {:?}",
+            base64::encode(&shared_conf.server_pubkey)
+        );
+        let conf = shared_conf.clone();
+        // make connection with server
+        let initiator = snowstorm::Builder::new(PATTERN.parse()?)
+            .remote_public_key(&conf.server_pubkey)
+            .local_private_key(&conf.client_prikey)
+            .build_initiator()?;
+        let conn = TcpStream::connect(&conf.server_addr).await?;
+        let enc_conn = NoiseStream::handshake(conn, initiator).await?;
+
+        // yamux outbound stream and wait for incomming stream
+        let yamux_config = yamux::Config::default();
+        let mut yamux_conn =
+            yamux::Connection::new(enc_conn.compat(), yamux_config, yamux::Mode::Server);
+
+        while let Ok(Some(inbound)) = yamux_conn.next_stream().await {
+            let this = this.clone();
+            tokio::spawn(async move {
+                if let Err(e) = this
+                    .handle_reverse_client_connection(inbound, &expose_addr)
+                    .await
+                {
+                    log::warn!("{}", e);
+                }
+            });
+        }
+        Ok(())
+    }
+
+    async fn handle_reverse_client_connection(
+        &self,
+        inbound: yamux::Stream,
+        expose_addr: &SocketAddr,
+    ) -> Result<(), Box<dyn Error>> {
+        log::info!("New incoming request, stream id {:?}", inbound.id());
+        let outbound = TcpStream::connect(expose_addr).await?;
+        let transfer = proxy::transfer(inbound.compat(), outbound).map(|r| {
             if let Err(e) = r {
                 log::error!("Transfer error occured. error={}", e);
             }

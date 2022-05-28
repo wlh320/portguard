@@ -222,7 +222,6 @@ impl Server {
                     "Start proxying {:?} to built-in socks5 server",
                     enc_inbound.get_inner().peer_addr(),
                 );
-
                 let socks5_config = fast_socks5::server::Config::default();
                 let config = Arc::new(socks5_config);
                 let socket = Socks5Socket::new(enc_inbound, config);
@@ -232,6 +231,32 @@ impl Server {
                     }
                 });
                 transfer.await;
+            }
+            Remote::Rvistor(id) => {
+                // TODO: incoming client
+                log::info!(
+                    "Start proxying {:?} to reverse service (id {:?})",
+                    enc_inbound.get_inner().peer_addr(),
+                    id
+                );
+                // 1. search if conn:id is connected
+                // 2. if id is valid, open a stream, copy inbound to this conn
+                // 3. else return error and close inbound
+            }
+            Remote::Rclient(port, id) => {
+                // TODO: incoming reverse client
+                log::info!(
+                    "Start reverse proxy {:?}:{} as a service (id {:?})",
+                    enc_inbound
+                        .get_inner()
+                        .peer_addr()
+                        .unwrap()
+                        .ip()
+                        .to_string(),
+                    port,
+                    id
+                )
+                // 1. save {id: conn} to a hashmap
             }
         }
         Ok(())

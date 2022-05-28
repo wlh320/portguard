@@ -45,16 +45,21 @@ mod strings {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Remote {
-    /// Remote address, works like `ssh -L`
+    /// remote address, for `ssh -L`
     Addr(SocketAddr),
-    /// builtin socks5 server, works like `ssh -D`
+    /// builtin socks5 server, for `ssh -D`
     #[serde(with = "strings::socks5")]
     Socks5,
+    /// service id of reverse proxy, for `ssh -R` visiter
+    Rvistor(usize),
+    /// port and service id of reverse proxy, for `ssh -R` client
+    Rclient(u16, usize)
 }
 impl FromStr for Remote {
     type Err = std::net::AddrParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // TODO: parse remote address
         if s.to_lowercase() == "socks5" {
             Ok(Remote::Socks5)
         } else {
@@ -67,6 +72,7 @@ impl ToString for Remote {
         match self {
             Remote::Addr(a) => a.to_string(),
             Remote::Socks5 => String::from("socks5"),
+            Remote::Reverse(id) => id.to_string()
         }
     }
 }
