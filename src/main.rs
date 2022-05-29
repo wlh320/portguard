@@ -56,9 +56,12 @@ enum Commands {
         /// name of client
         #[clap(short, long, default_value = "user")]
         name: String,
-        /// client specified remote address
+        /// client's target address, can be socket address or "socks5"
         #[clap(short, long)]
-        remote: Option<Remote>,
+        target: Option<String>,
+        /// service id of a reverse proxy
+        #[clap(short, long)]
+        sid: Option<usize>,
     },
     /// Generate keypairs
     GenKey {
@@ -102,11 +105,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
             input: in_path,
             output: out_path,
             name,
-            remote,
+            target,
+            sid,
         } => {
             let in_path = in_path.unwrap_or(env::current_exe()?);
             let content = std::fs::read_to_string(&path)?;
             let config = toml::de::from_str(&content)?;
+            let remote = Remote::try_parse(target, sid)
+                .map_err(|e| {
+                    log::warn!("Invalid remote input, use default, error {}", e);
+                })
+                .ok();
 
             let mut server = portguard::server::Server::new(config, &path);
             server.gen_client(in_path, out_path, name, remote)?;

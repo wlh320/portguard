@@ -1,6 +1,6 @@
 # portguard
 
-An encrypted port forwarding tool that works like `ssh -L` and `ssh -D`, but **Zero Config** for client.
+An encrypted port forwarding tool that just works like ssh tunnel, but **Zero Config** for client.
 
 It is currently a simple project and the author is not familiar with security, we take no responsibility for any security flaws.
 
@@ -8,29 +8,39 @@ Welcome to create issues and pull requests.
 
 [中文介绍](https://github.com/wlh320/portguard/blob/master/README_zh.md)
 
+## Use case
+
+- You need expose local port to public ip with encryption and authorization.
+- You just need to config server and then send executables to your clients, they can run it without any config.
+
 ## Features
 
+- Works just like ssh tunnel, but using `Noise` protocol.
 - Client's binary executable is auto generated from server, user can run it **without any config by hand**, and only generated clients can communicate with server for auth.
 - Every DH key used is auto generated too, without any copy-and-paste of config files.
 
 ## How it works
 
 ```
-client <-> server <-> remote
+remote1 <-> client <-> server <-> remote2
 ```
 
-1. Client listens on local port.
-2. Server listens on public port.
-3. Remote can be a remote port (google.com:443), server's local port (127.0.0.1:xxxx), or dynamic (using a built-in SOCKS5 server).
+1. Server listens on public IP and a public port.
+2. Remote can be a remote port (google.com:443), a local port (127.0.0.1:xxxx), or dynamic.
+3. Client can work in 4 different modes:
+	- `ssh -L` mode: visit static port of remote2 through server.
+	- `ssh -D` mode: visit dynamic remote2 through server's builtin socks5 server.
+	- `ssh -R` mode: expose port of remote1 to server and register a _service id_.
+	- `ssh -R visitor` mode: only clients in this mode with same _service id_ can visit the exposed port
 4. Client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
-5. Client's local port is forwarded to remote port by server, and traffic between client and server is *encrypted*.
+5. Data transferred with encryption between client and server.
 
 ## Usage
 
 1. Config server with a `config.toml` file.
 
 	Example:
-	```
+	```toml
 	host = '192.168.1.1'         # host of server
 	port = 8022                  # port of server
 	remote = '127.0.0.1:1080'    # default static remote (can be customized per client)
@@ -40,7 +50,7 @@ client <-> server <-> remote
 2. Generate server keypair by running `portguard gen-key -c config.toml`.
 
 	After that, `config.toml` becomes:
-	```
+	```toml
 	host = '192.168.1.1'
 	port = 8022
 	remote = '127.0.0.1:1080'
@@ -48,28 +58,66 @@ client <-> server <-> remote
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
 	```
 
-2. Generate client binary executable by running `portguard gen-cli -c config.toml -o pgcli`.
+3. Generate client binary executable using `portguard gen-cli` subcommand in 4 different modes:
 
-	After that, `config.toml` becomes:
 	```
+	USAGE:
+		portguard gen-cli [OPTIONS] --config <CONFIG> --output <OUTPUT>
+
+	OPTIONS:
+		-c, --config <CONFIG>    location of config file
+		-h, --help               Print help information
+		-i, --input <INPUT>      location of input binary (current binary by default)
+		-n, --name <NAME>        name of client [default: user]
+		-o, --output <OUTPUT>    location of output binary
+		-s, --sid <SID>          service id of a reverse proxy
+		-t, --target <TARGET>    client's target address, can be socket address or "socks5"
+	```
+
+	Example of generated config file:
+
+	```toml
 	host = '192.168.1.1'
 	port = 8022
 	remote = '127.0.0.1:1080'
 	pubkey = '1y3HW8TDxChtke5nyEdLGj+OkQSg8JjLdalSHzD+aWI='
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
-	[clients."KhM4xjza7I8gD7U3uQGuTZ73fIU+Zi66QJzPhmLFJQ0="]
-	name = 'user'
-	pubkey = 'KhM4xjza7I8gD7U3uQGuTZ73fIU+Zi66QJzPhmLFJQ0='
-	```
 
-	And a client binary executable is output to `pgcli`
+	# works like ssh -L
+	# to generate this, run: ./portguard gen-cli -c config.toml -o cli_socks5 -t 127.0.0.1:2333
+	[clients."qFGPs28K1hshENagjW3aKVXn4NrB7X2jftBue3SLRW0="]
+	name = 'proxy'
+	pubkey = 'qFGPs28K1hshENagjW3aKVXn4NrB7X2jftBue3SLRW0='
+	remote = '127.0.0.1:2333'
+
+	# works like ssh -D
+	# to generate this, run: ./portguard gen-cli -c config.toml -o cli_socks5 -t socks5
+	[clients."AIVbWCQQ0+VawQZk/AVjq2Ix9SagngxGXtEK26AUa3U="]
+	name = 'proxy_socks'
+	pubkey = 'AIVbWCQQ0+VawQZk/AVjq2Ix9SagngxGXtEK26AUa3U='
+	remote = 'socks5'
+
+	# works like ssh -R
+	# to generate this, run: ./portguard gen-cli -c config.toml -o cli_rclient -s 1 -t 127.0.0.1:8000
+	[clients."h6M/DaKv5IOMM4Y2dkiZKpudQ5BCO5DvnNNWqZczGXs="]
+	name = 'reverse proxy client'
+	pubkey = 'h6M/DaKv5IOMM4Y2dkiZKpudQ5BCO5DvnNNWqZczGXs='
+	remote = ['127.0.0.1:8000', 1]
+
+	# in order to connect port exposed by ssh -R
+	# to generate this, run: ./portguard gen-cli -c config.toml -o rvisitor -s 1
+	[clients."Q5VqAyS9dl0CSrOnWOB9XmI0Kb1X83FL6iee3Iio9ls="]
+	name = 'reverse proxy visitor'
+	pubkey = 'Q5VqAyS9dl0CSrOnWOB9XmI0Kb1X83FL6iee3Iio9ls='
+	remote = 1
+	```
 
 3. Run `portguard server -c config.toml` on server
 
-4. Run `pgcli` on client without any configs
+4. Run generated binary on client without any configs
 (local port or server address can be customized with `pgcli -p port -s saddr:sport` if you like).
 
-5. All TCP traffic to client's local port is forwarded to remote by server with encryption.
+5. Done.
 
 ## TODO
 
@@ -79,6 +127,9 @@ client <-> server <-> remote
 - [ ] Test.
 
 ## Changelog
+
+### v0.3.0
+- add `ssh -R` feature using yamux
 
 ### v0.2.1
 - add `x86_64-apple-darwin` support (not tested)

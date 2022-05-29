@@ -1,5 +1,5 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::{proxy, Remote};
+use crate::{proxy};
 use bincode::Options;
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use futures::FutureExt;
@@ -17,7 +17,7 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub server_addr: SocketAddr,
-    pub target_addr: Remote,
+    pub target_addr: String,
     pub server_pubkey: Vec<u8>,
     pub client_prikey: Vec<u8>,
 }
@@ -110,11 +110,12 @@ impl Client {
         if let Some(addr) = server_addr {
             conf.server_addr = addr;
         }
-        assert!(matches!(conf.target_addr, Remote::Rclient(_, _)));
+        // must be valid address
+        assert!(conf.target_addr.parse::<SocketAddr>().is_ok());
         // if let Some(addr) = expose_addr {
-            // if let Remote::Rclient(_, id) = conf.target_addr {
-                // conf.target_addr = Remote::Rclient(addr, id);
-            // }
+        // if let Remote::Rclient(_, id) = conf.target_addr {
+        // conf.target_addr = Remote::Rclient(addr, id);
+        // }
         // }
         let shared_conf = Arc::new(conf);
         // log information
@@ -132,7 +133,6 @@ impl Client {
         }
     }
 
-    /// TODO: impl reverse client
     pub async fn make_reverse_proxy_conn(&self, conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
         // make connection with server
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
@@ -163,15 +163,14 @@ impl Client {
         conf: &ClientConfig,
     ) -> Result<(), Box<dyn Error>> {
         log::info!("New incoming request, stream id {:?}", inbound.id());
-        if let &Remote::Rclient(expose_addr, _id) = &conf.target_addr {
-            let outbound = TcpStream::connect(expose_addr).await?;
-            let transfer = proxy::transfer(inbound.compat(), outbound).map(|r| {
-                if let Err(e) = r {
-                    log::warn!("Transfer error occured. error={}", e);
-                }
-            });
-            transfer.await;
-        }
+        let expose_addr = &conf.target_addr.parse::<SocketAddr>().expect("Invalid target address");
+        let outbound = TcpStream::connect(expose_addr).await?;
+        let transfer = proxy::transfer(inbound.compat(), outbound).map(|r| {
+            if let Err(e) = r {
+                log::warn!("Transfer error occured. error={}", e);
+            }
+        });
+        transfer.await;
         Ok(())
     }
 

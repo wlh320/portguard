@@ -1,4 +1,4 @@
-use crate::client::{ClientConfig, CLIENT_CONF_BUF};
+use crate::client::{ClientConfig};
 use crate::consts::{CONF_BUF_LEN, PATTERN};
 use crate::proxy;
 use crate::remote::Remote;
@@ -117,18 +117,14 @@ impl Server {
         username: String,
         remote: Option<Remote>,
     ) -> Result<(), Box<dyn Error>> {
-        // let mut cli_conf: ClientConfig = bincode::deserialize(&CLIENT_CONF_BUF)?;
-        let mut cli_conf: ClientConfig = bincode::options()
-            .with_limit(CONF_BUF_LEN as u64)
-            .allow_trailing_bytes()
-            .deserialize(&CLIENT_CONF_BUF)
-            .unwrap();
         // 1. set client config
         let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
-        cli_conf.client_prikey = key.private;
-        cli_conf.server_pubkey = self.config.pubkey.clone();
-        cli_conf.server_addr = format!("{}:{}", self.config.host, self.config.port).parse()?;
-        cli_conf.target_addr = remote.unwrap_or(self.config.remote);
+        let cli_conf: ClientConfig = ClientConfig { 
+            server_addr: format!("{}:{}", self.config.host, self.config.port).parse()?, 
+            target_addr: remote.unwrap_or(self.config.remote).to_string(), 
+            server_pubkey: self.config.pubkey.clone(), 
+            client_prikey: key.private
+        };
 
         // 2. crate new binary
         let new_exe = in_path.as_ref().with_extension("tmp");
@@ -228,7 +224,10 @@ impl Server {
         match remote {
             Remote::Addr(out_addr) => Self::proxy_to_remote(enc_inbound, out_addr).await?,
             Remote::Socks5 => Self::proxy_to_socks5(enc_inbound).await?,
-            Remote::Rvisitor(id) => tx.send(RproxyConn::Visitor(id, Box::new(enc_inbound))).await?,
+            Remote::Rvisitor(id) => {
+                tx.send(RproxyConn::Visitor(id, Box::new(enc_inbound)))
+                    .await?
+            }
             Remote::Rclient(addr, id) => {
                 Self::create_rproxy_conn(enc_inbound, id, addr, tx).await?
             }
@@ -245,6 +244,11 @@ impl Server {
                     conns.insert(id, Arc::new(Mutex::new(ctrl)));
                 }
                 RproxyConn::Visitor(id, inbound) => {
+                    log::info!(
+                        "Start proxying {:?} to rproxy service (id: {})",
+                        inbound.get_inner().peer_addr(),
+                        id
+                    );
                     if let Some(ctrl) = conns.get(&id) {
                         if let Ok(outbound) = ctrl.lock().await.open_stream().await {
                             tokio::spawn(async move {
@@ -257,7 +261,7 @@ impl Server {
                                 transfer.await;
                             });
                         } else {
-                            log::warn!("Rproxy error occured. Cannot create connection (id: {})", id);
+                            log::warn!("Rproxy error occured. Cannot connect service (id: {})", id);
                         }
                     } else {
                         log::warn!("Rproxy error occured. No such service (id: {})", id);
@@ -317,9 +321,24 @@ impl Server {
             id
         );
         let yamux_config = yamux::Config::default();
-        let yamux_conn =
+        let mut yamux_conn =
             yamux::Connection::new(inbound.compat(), yamux_config, yamux::Mode::Client);
         let control = yamux_conn.control();
+        tokio::spawn(async move {
+            loop {
+                match yamux_conn.next_stream().await {
+                    Ok(Some(_)) => (),
+                    Err(e) => {
+                        log::info!("{}", e);
+                        break;
+                    }
+                    Ok(None) => {
+                        log::info!("closed");
+                        break;
+                    }
+                }
+            }
+        });
         tx.send(RproxyConn::Client(id, control)).await?;
         Ok(())
     }
