@@ -27,6 +27,9 @@ struct ClientArgs {
     /// use another server address in this run
     #[clap(short, long)]
     server: Option<String>,
+    /// whether a reverse proxy client
+    #[clap(short, long)]
+    reverse: bool,
 }
 
 #[derive(Subcommand)]
@@ -67,18 +70,26 @@ enum Commands {
     ListKey {
         /// if set this flag, then also list server pubkey
         #[clap(short, long)]
-        server: bool
-    }
+        server: bool,
+    },
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let client_cmd = cli.command.unwrap_or(Commands::Client(cli.client));
     match client_cmd {
-        Commands::Client(ClientArgs { port, server }) => {
+        Commands::Client(ClientArgs {
+            port,
+            server,
+            reverse,
+        }) => {
             let client = Client::new(port);
             let server = server.and_then(|s| s.parse().ok());
-            client.run_client_proxy(server).await?;
+            if reverse {
+                client.run_client_reverse_proxy(server).await?;
+            } else {
+                client.run_client_proxy(server).await?;
+            }
         }
         Commands::Server { config: path } => {
             let content = std::fs::read_to_string(&path)?;

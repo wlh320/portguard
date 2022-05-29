@@ -1,5 +1,5 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::proxy;
+use crate::{proxy, Remote};
 use bincode::Options;
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use futures::FutureExt;
@@ -9,16 +9,15 @@ use snowstorm::NoiseStream;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_util::compat::{
-    FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt,
-};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 /// client's builtin config, will be serialized to bincode
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub server_addr: SocketAddr,
-    pub target_addr: String, // only for print in log
+    pub target_addr: Remote,
     pub server_pubkey: Vec<u8>,
     pub client_prikey: Vec<u8>,
 }
@@ -39,38 +38,34 @@ impl Client {
         Client { port }
     }
 
-    /// normal client
+    /// client type: visitor (addr, socks5, rproxy)
+    /// in config: remote = "127.0.0.1:xxxx"
+    ///     or     remote = "socks5"
+    ///     or     remote = 66
     pub async fn run_client_proxy(
         self,
         server_addr: Option<SocketAddr>,
     ) -> Result<(), Box<dyn Error>> {
-        let this = Arc::new(self);
+        // read client config, overwrite server address
         let mut conf: ClientConfig = bincode::options()
             .with_limit(CONF_BUF_LEN as u64)
             .allow_trailing_bytes()
             .deserialize(&CLIENT_CONF_BUF)?;
-
-        // overwrite server address
         if let Some(addr) = server_addr {
             conf.server_addr = addr;
         }
+        // log information
         let shared_conf = Arc::new(conf);
-        let listen_addr: SocketAddr = format!("127.0.0.1:{}", this.port).parse()?;
+        let listen_addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
         log::info!("Client listening on: {:?}", listen_addr);
         log::info!("Portguard server on: {:?}", shared_conf.server_addr);
         log::info!("Target address: {:?}", shared_conf.target_addr);
-        log::debug!(
-            "Portguard server public key: {:?}",
-            base64::encode(&shared_conf.server_pubkey)
-        );
-
+        // start proxy
         let listener = TcpListener::bind(listen_addr).await?;
-
         while let Ok((inbound, _)) = listener.accept().await {
-            let this = this.clone();
             let conf = shared_conf.clone();
             tokio::spawn(async move {
-                if let Err(e) = this.handle_client_connection(inbound, &conf).await {
+                if let Err(e) = Client::handle_client_connection(inbound, &conf).await {
                     log::warn!("{}", e);
                 }
             });
@@ -79,51 +74,66 @@ impl Client {
     }
 
     async fn handle_client_connection(
-        &self,
         inbound: TcpStream,
         conf: &ClientConfig,
     ) -> Result<(), Box<dyn Error>> {
         log::info!("New incoming peer_addr {:?}", inbound.peer_addr());
+        // make noise stream
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
             .local_private_key(&conf.client_prikey)
             .build_initiator()?;
         let outbound = TcpStream::connect(conf.server_addr).await?;
         let enc_outbound = NoiseStream::handshake(outbound, initiator).await?;
-
+        // transfer data
         let transfer = proxy::transfer(inbound, enc_outbound).map(|r| {
             if let Err(e) = r {
-                log::error!("Transfer error occured. error={}", e);
+                log::warn!("Transfer error occured. error={}", e);
             }
         });
         transfer.await;
         Ok(())
     }
 
-    /// TODO: impl reverse client
-    pub async fn run_reverse_client_proxy(
+    /// client type: rclient (rproxy client)
+    /// in config: remote = ["127.0.0.1:xxxx", 66]
+    pub async fn run_client_reverse_proxy(
         self,
         server_addr: Option<SocketAddr>,
+        // expose_addr: Option<SocketAddr>,
     ) -> Result<(), Box<dyn Error>> {
-        let this = Arc::new(self);
+        // read client config, overwrite server address and expose address
         let mut conf: ClientConfig = bincode::options()
             .with_limit(CONF_BUF_LEN as u64)
             .allow_trailing_bytes()
             .deserialize(&CLIENT_CONF_BUF)?;
-
-        // overwrite server address
         if let Some(addr) = server_addr {
             conf.server_addr = addr;
         }
+        assert!(matches!(conf.target_addr, Remote::Rclient(_, _)));
+        // if let Some(addr) = expose_addr {
+            // if let Remote::Rclient(_, id) = conf.target_addr {
+                // conf.target_addr = Remote::Rclient(addr, id);
+            // }
+        // }
         let shared_conf = Arc::new(conf);
-        let expose_addr: SocketAddr = format!("127.0.0.1:{}", this.port).parse()?;
-        log::info!("Client exposing service on: {:?}", expose_addr);
-        log::info!("Portguard server on: {:?}", shared_conf.server_addr);
-        log::debug!(
-            "Portguard server public key: {:?}",
-            base64::encode(&shared_conf.server_pubkey)
-        );
-        let conf = shared_conf.clone();
+        // log information
+        log::info!("Client exposing service on: 127.0.0.1:{}", self.port);
+        log::info!("Portguard server on: {:?}", &shared_conf.server_addr);
+        log::info!("Target address: {:?}", shared_conf.target_addr);
+        // start reverse proxy
+        loop {
+            let conf = shared_conf.clone();
+            if let Err(e) = self.make_reverse_proxy_conn(&conf).await {
+                log::warn!("Failed to make reverse proxy connection. Error: {}", e);
+            }
+            // failed, wait and retry
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    /// TODO: impl reverse client
+    pub async fn make_reverse_proxy_conn(&self, conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
         // make connection with server
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
@@ -138,12 +148,9 @@ impl Client {
             yamux::Connection::new(enc_conn.compat(), yamux_config, yamux::Mode::Server);
 
         while let Ok(Some(inbound)) = yamux_conn.next_stream().await {
-            let this = this.clone();
+            let conf = conf.clone();
             tokio::spawn(async move {
-                if let Err(e) = this
-                    .handle_reverse_client_connection(inbound, &expose_addr)
-                    .await
-                {
+                if let Err(e) = Client::handle_reverse_client_connection(inbound, &conf).await {
                     log::warn!("{}", e);
                 }
             });
@@ -152,18 +159,19 @@ impl Client {
     }
 
     async fn handle_reverse_client_connection(
-        &self,
         inbound: yamux::Stream,
-        expose_addr: &SocketAddr,
+        conf: &ClientConfig,
     ) -> Result<(), Box<dyn Error>> {
         log::info!("New incoming request, stream id {:?}", inbound.id());
-        let outbound = TcpStream::connect(expose_addr).await?;
-        let transfer = proxy::transfer(inbound.compat(), outbound).map(|r| {
-            if let Err(e) = r {
-                log::error!("Transfer error occured. error={}", e);
-            }
-        });
-        transfer.await;
+        if let &Remote::Rclient(expose_addr, _id) = &conf.target_addr {
+            let outbound = TcpStream::connect(expose_addr).await?;
+            let transfer = proxy::transfer(inbound.compat(), outbound).map(|r| {
+                if let Err(e) = r {
+                    log::warn!("Transfer error occured. error={}", e);
+                }
+            });
+            transfer.await;
+        }
         Ok(())
     }
 

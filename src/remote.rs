@@ -45,15 +45,15 @@ mod strings {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Remote {
-    /// remote address, for `ssh -L`
+    /// visitor of remote address, for `ssh -L`
     Addr(SocketAddr),
-    /// builtin socks5 server, for `ssh -D`
+    /// visitor of builtin socks5 server, for `ssh -D`
     #[serde(with = "strings::socks5")]
     Socks5,
-    /// service id of reverse proxy, for `ssh -R` visiter
-    Rvistor(usize),
-    /// port and service id of reverse proxy, for `ssh -R` client
-    Rclient(u16, usize)
+    /// visitor of reverse proxy, need service id, for `ssh -R` visitor
+    Rvisitor(usize),
+    /// client of reverse proxy, need addr and service id, for ssh -R` client
+    Rclient(SocketAddr, usize),
 }
 impl FromStr for Remote {
     type Err = std::net::AddrParseError;
@@ -72,7 +72,9 @@ impl ToString for Remote {
         match self {
             Remote::Addr(a) => a.to_string(),
             Remote::Socks5 => String::from("socks5"),
-            Remote::Reverse(id) => id.to_string()
+            Remote::Rvisitor(id) => format!("reverse service {}", id),
+            Remote::Rclient(remote, _id ) => remote.to_string(),
         }
     }
 }
+
