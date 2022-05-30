@@ -1,3 +1,4 @@
+use futures::FutureExt;
 use std::error::Error;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 
@@ -21,4 +22,17 @@ where
     tokio::try_join!(client_to_server, server_to_client)?;
 
     Ok(())
+}
+
+pub(crate) async fn transfer_and_log_error<S1, S2>(inbound: S1, outbound: S2)
+where
+    S1: AsyncRead + AsyncWrite + Unpin,
+    S2: AsyncRead + AsyncWrite + Unpin,
+{
+    let transfer = crate::proxy::transfer(inbound, outbound).map(|r| {
+        if let Err(e) = r {
+            log::warn!("Transfer error occured. error={}", e);
+        }
+    });
+    transfer.await;
 }

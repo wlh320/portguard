@@ -1,5 +1,5 @@
-use crate::client::{ClientConfig};
-use crate::consts::{CONF_BUF_LEN, PATTERN};
+use crate::client::ClientConfig;
+use crate::consts::{CONF_BUF_LEN, PATTERN, RPROXY_CHAN_LEN};
 use crate::proxy;
 use crate::remote::Remote;
 
@@ -93,7 +93,9 @@ impl ServerConfig {
 
 #[derive(Debug)]
 enum RproxyConn {
+    /// one who creates reverse proxy
     Client(usize, yamux::Control),
+    /// one who visits reverse proxy
     Visitor(usize, Box<NoiseStream<TcpStream>>),
 }
 
@@ -119,11 +121,11 @@ impl Server {
     ) -> Result<(), Box<dyn Error>> {
         // 1. set client config
         let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
-        let cli_conf: ClientConfig = ClientConfig { 
-            server_addr: format!("{}:{}", self.config.host, self.config.port).parse()?, 
-            target_addr: remote.unwrap_or(self.config.remote).to_string(), 
-            server_pubkey: self.config.pubkey.clone(), 
-            client_prikey: key.private
+        let cli_conf: ClientConfig = ClientConfig {
+            server_addr: format!("{}:{}", self.config.host, self.config.port).parse()?,
+            target_addr: remote.unwrap_or(self.config.remote).to_string(),
+            server_pubkey: self.config.pubkey.clone(),
+            client_prikey: key.private,
         };
 
         // 2. crate new binary
@@ -177,8 +179,8 @@ impl Server {
         let listen_addr: SocketAddr = format!("0.0.0.0:{}", this.config.port).parse().unwrap();
         log::info!("Listening on port: {:?}", listen_addr);
 
-        // handle reverse proxy
-        let (tx, rx) = mpsc::channel::<RproxyConn>(100);
+        // spwan to handle reverse proxy
+        let (tx, rx) = mpsc::channel::<RproxyConn>(RPROXY_CHAN_LEN);
         let rproxy_handle = tokio::spawn(async move {
             if let Err(e) = Self::handle_reverse_proxy(rx).await {
                 log::warn!("{}", e);
@@ -224,55 +226,14 @@ impl Server {
         match remote {
             Remote::Addr(out_addr) => Self::proxy_to_remote(enc_inbound, out_addr).await?,
             Remote::Socks5 => Self::proxy_to_socks5(enc_inbound).await?,
-            Remote::Rvisitor(id) => {
+            Remote::Service(id) => {
                 tx.send(RproxyConn::Visitor(id, Box::new(enc_inbound)))
                     .await?
             }
-            Remote::Rclient(addr, id) => {
-                Self::create_rproxy_conn(enc_inbound, id, addr, tx).await?
-            }
+            Remote::RProxy(addr, id) => Self::create_rproxy_conn(enc_inbound, id, addr, tx).await?,
         };
         Ok(())
     }
-
-    async fn handle_reverse_proxy(mut rx: Receiver<RproxyConn>) -> Result<(), Box<dyn Error>> {
-        type Control = Arc<Mutex<yamux::Control>>;
-        let mut conns: HashMap<usize, Control> = HashMap::new();
-        while let Some(conn) = rx.recv().await {
-            match conn {
-                RproxyConn::Client(id, ctrl) => {
-                    conns.insert(id, Arc::new(Mutex::new(ctrl)));
-                }
-                RproxyConn::Visitor(id, inbound) => {
-                    log::info!(
-                        "Start proxying {:?} to rproxy service (id: {})",
-                        inbound.get_inner().peer_addr(),
-                        id
-                    );
-                    if let Some(ctrl) = conns.get(&id) {
-                        if let Ok(outbound) = ctrl.lock().await.open_stream().await {
-                            tokio::spawn(async move {
-                                let transfer =
-                                    proxy::transfer(inbound, outbound.compat()).map(|r| {
-                                        if let Err(e) = r {
-                                            log::warn!("Transfer error occured. error={}", e);
-                                        }
-                                    });
-                                transfer.await;
-                            });
-                        } else {
-                            log::warn!("Rproxy error occured. Cannot connect service (id: {})", id);
-                        }
-                    } else {
-                        log::warn!("Rproxy error occured. No such service (id: {})", id);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    // server proxy function
     async fn proxy_to_remote(
         inbound: NoiseStream<TcpStream>,
         out_addr: SocketAddr,
@@ -283,12 +244,7 @@ impl Server {
             out_addr
         );
         let outbound = TcpStream::connect(out_addr).await?;
-        let transfer = proxy::transfer(inbound, outbound).map(|r| {
-            if let Err(e) = r {
-                log::warn!("Transfer error occured. error={}", e);
-            }
-        });
-        transfer.await;
+        proxy::transfer_and_log_error(inbound, outbound).await;
         Ok(())
     }
     async fn proxy_to_socks5(inbound: NoiseStream<TcpStream>) -> Result<(), Box<dyn Error>> {
@@ -321,25 +277,47 @@ impl Server {
             id
         );
         let yamux_config = yamux::Config::default();
-        let mut yamux_conn =
+        let yamux_conn =
             yamux::Connection::new(inbound.compat(), yamux_config, yamux::Mode::Client);
         let control = yamux_conn.control();
-        tokio::spawn(async move {
-            loop {
-                match yamux_conn.next_stream().await {
-                    Ok(Some(_)) => (),
-                    Err(e) => {
-                        log::info!("{}", e);
-                        break;
+        // TODO: dont know why yamux client needs to do this.
+        tokio::task::spawn({
+            use futures::StreamExt;
+            yamux::into_stream(yamux_conn).for_each(|_| async {})
+        });
+        tx.send(RproxyConn::Client(id, control)).await?;
+        Ok(())
+    }
+
+    async fn handle_reverse_proxy(mut rx: Receiver<RproxyConn>) -> Result<(), Box<dyn Error>> {
+        type Control = Arc<Mutex<yamux::Control>>;
+        let mut conns: HashMap<usize, Control> = HashMap::new();
+        while let Some(conn) = rx.recv().await {
+            match conn {
+                RproxyConn::Client(id, ctrl) => {
+                    conns.insert(id, Arc::new(Mutex::new(ctrl)));
+                }
+                RproxyConn::Visitor(id, inbound) => {
+                    log::info!(
+                        "Start proxying {:?} to rproxy service (id: {})",
+                        inbound.get_inner().peer_addr(),
+                        id
+                    );
+                    if !conns.contains_key(&id) {
+                        log::warn!("Rproxy error occured. No such service (id: {})", id);
+                        continue;
                     }
-                    Ok(None) => {
-                        log::info!("closed");
-                        break;
+                    let ctrl = conns.get(&id).unwrap();
+                    if let Ok(outbound) = ctrl.lock().await.open_stream().await {
+                        tokio::spawn(async move {
+                            proxy::transfer_and_log_error(inbound, outbound.compat()).await;
+                        });
+                    } else {
+                        log::warn!("Rproxy error occured. Cannot connect service (id: {})", id);
                     }
                 }
             }
-        });
-        tx.send(RproxyConn::Client(id, control)).await?;
+        }
         Ok(())
     }
 }
@@ -372,24 +350,3 @@ fn get_client_config_section(file: &File) -> Option<(u64, u64)> {
     }
     None
 }
-
-// #[cfg(test)]
-// mod tests {
-//     #[test]
-//     fn test_serde_remote() {
-//         use super::super::server::ClientEntry;
-//         use super::Remote;
-
-//         // let r_rc = Remote::Rclient("127.0.0.1:1080".parse().unwrap(), 123);
-//         let r_r = Remote::Addr("127.0.0.1:1080".parse().unwrap());
-//         // let r_s = Remote::Socks5;
-//         let r_rv = Remote::Rvisitor(666);
-//         let ct = ClientEntry {
-//             name: String::from("aaa"),
-//             pubkey: Vec::new(),
-//             remote: Some(r_rv),
-//         };
-//         let s = toml::to_string(&r_r).unwrap();
-//         assert_eq!(s, String::from("1"));
-//     }
-// }

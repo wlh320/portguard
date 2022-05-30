@@ -61,7 +61,7 @@ enum Commands {
         target: Option<String>,
         /// service id of a reverse proxy
         #[clap(short, long)]
-        sid: Option<usize>,
+        service: Option<usize>,
     },
     /// Generate keypairs
     GenKey {
@@ -106,12 +106,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
             output: out_path,
             name,
             target,
-            sid,
+            service,
         } => {
             let in_path = in_path.unwrap_or(env::current_exe()?);
             let content = std::fs::read_to_string(&path)?;
             let config = toml::de::from_str(&content)?;
-            let remote = Remote::try_parse(target, sid)
+            let remote = Remote::try_parse(target, service)
                 .map_err(|e| {
                     log::warn!("Invalid remote input, use default, error {}", e);
                 })

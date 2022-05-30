@@ -54,33 +54,10 @@ pub enum Remote {
     #[serde(with = "strings::socks5")]
     Socks5,
     /// visitor of reverse proxy, need service id, for `ssh -R` visitor
-    Rvisitor(usize),
+    Service(usize),
     /// client of reverse proxy, need addr and service id, for ssh -R` client
-    Rclient(SocketAddr, usize),
+    RProxy(SocketAddr, usize),
 }
-// impl FromStr for Remote {
-//     type Err = Box<dyn std::error::Error>;
-
-//     fn from_str(s: &str) -> Result<Self, Self::Err> {
-//         // TODO: parse remote address
-//         // Warning: not for Rclient
-//         if s.to_lowercase() == "socks5" {
-//             Ok(Remote::Socks5)
-//         } else {
-//             s.parse::<SocketAddr>()
-//                 .map(Remote::Addr)
-//                 .or(s.parse::<usize>().map(Remote::Rvisitor))
-//                 .map_err(|e| e.into())
-//         }
-//     }
-// }
-// #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-// pub enum Role {
-//     Pclient,
-//     PSocks5,
-//     Rvisitor,
-//     Rclient,
-// }
 
 impl Remote {
     /// if input only target, client can be addr or socks5
@@ -94,11 +71,11 @@ impl Remote {
     /// if input both target and id, client is rclient
     fn from_target_and_id(target: &str, id: usize) -> Result<Remote, Box<dyn Error>> {
         let addr = target.parse::<SocketAddr>()?;
-        Ok(Remote::Rclient(addr, id))
+        Ok(Remote::RProxy(addr, id))
     }
     /// if input only id, client is rvisitor
     fn from_id(id: usize) -> Remote {
-        Remote::Rvisitor(id)
+        Remote::Service(id)
     }
 
     pub fn try_parse(target: Option<String>, id: Option<usize>) -> Result<Remote, Box<dyn Error>> {
@@ -122,8 +99,8 @@ impl ToString for Remote {
         match self {
             Remote::Addr(a) => a.to_string(),
             Remote::Socks5 => String::from("socks5"),
-            Remote::Rvisitor(id) => format!("(sid {})", id),
-            Remote::Rclient(a, _id) => a.to_string()
+            Remote::Service(id) => format!("(sid {})", id),
+            Remote::RProxy(a, _id) => a.to_string()
         }
     }
 }

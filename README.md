@@ -10,8 +10,8 @@ Welcome to create issues and pull requests.
 
 ## Use case
 
-- You need expose local port to public ip with encryption and authorization.
-- You just need to config server and then send executables to your clients, they can run it without any config.
+- You need to expose local port to public ip with encryption and authorization.
+- You don't like teaching your users how to config the client program.
 
 ## Features
 
@@ -27,11 +27,11 @@ remote1 <-> client <-> server <-> remote2
 
 1. Server listens on public IP and a public port.
 2. Remote can be a remote port (google.com:443), a local port (127.0.0.1:xxxx), or dynamic.
-3. Client can work in 4 different modes:
+3. Client works in any of the following modes:
 	- `ssh -L` mode: visit static port of remote2 through server.
 	- `ssh -D` mode: visit dynamic remote2 through server's builtin socks5 server.
 	- `ssh -R` mode: expose port of remote1 to server and register a _service id_.
-	- `ssh -R visitor` mode: only clients in this mode with same _service id_ can visit the exposed port
+	- `ssh -R visitor` mode: only clients in this mode with same _service id_ can visit the exposed port.
 4. Client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
 5. Data transferred with encryption between client and server.
 
@@ -62,16 +62,16 @@ remote1 <-> client <-> server <-> remote2
 
 	```
 	USAGE:
-		portguard gen-cli [OPTIONS] --config <CONFIG> --output <OUTPUT>
+	    portguard gen-cli [OPTIONS] --config <CONFIG> --output <OUTPUT>
 
 	OPTIONS:
-		-c, --config <CONFIG>    location of config file
-		-h, --help               Print help information
-		-i, --input <INPUT>      location of input binary (current binary by default)
-		-n, --name <NAME>        name of client [default: user]
-		-o, --output <OUTPUT>    location of output binary
-		-s, --sid <SID>          service id of a reverse proxy
-		-t, --target <TARGET>    client's target address, can be socket address or "socks5"
+	    -c, --config <CONFIG>      location of config file
+	    -h, --help                 Print help information
+	    -i, --input <INPUT>        location of input binary (current binary by default)
+	    -n, --name <NAME>          name of client [default: user]
+	    -o, --output <OUTPUT>      location of output binary
+	    -s, --service <SERVICE>    service id of a reverse proxy
+	    -t, --target <TARGET>      client's target address, can be socket address or "socks5"
 	```
 
 	Example of generated config file:
@@ -84,7 +84,7 @@ remote1 <-> client <-> server <-> remote2
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
 
 	# works like ssh -L
-	# to generate this, run: ./portguard gen-cli -c config.toml -o cli_socks5 -t 127.0.0.1:2333
+	# to generate this, run: ./portguard gen-cli -c config.toml -o cli -t 127.0.0.1:2333
 	[clients."qFGPs28K1hshENagjW3aKVXn4NrB7X2jftBue3SLRW0="]
 	name = 'proxy'
 	pubkey = 'qFGPs28K1hshENagjW3aKVXn4NrB7X2jftBue3SLRW0='
@@ -98,7 +98,7 @@ remote1 <-> client <-> server <-> remote2
 	remote = 'socks5'
 
 	# works like ssh -R
-	# to generate this, run: ./portguard gen-cli -c config.toml -o cli_rclient -s 1 -t 127.0.0.1:8000
+	# to generate this, run: ./portguard gen-cli -c config.toml -o rclient -s 1 -t 127.0.0.1:8000
 	[clients."h6M/DaKv5IOMM4Y2dkiZKpudQ5BCO5DvnNNWqZczGXs="]
 	name = 'reverse proxy client'
 	pubkey = 'h6M/DaKv5IOMM4Y2dkiZKpudQ5BCO5DvnNNWqZczGXs='
@@ -112,24 +112,23 @@ remote1 <-> client <-> server <-> remote2
 	remote = 1
 	```
 
-3. Run `portguard server -c config.toml` on server
+3. Run `portguard server -c config.toml` on server side.
 
-4. Run generated binary on client without any configs
+4. Run generated binary on client side without any configs
 (local port or server address can be customized with `pgcli -p port -s saddr:sport` if you like).
-
-5. Done.
 
 ## TODO
 
-- [ ] I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake.
+- [ ] I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).
 - [x] Set remote address per client.
-- [ ] Improve performance.
+- [ ] Benchmark and improve performance.
 - [ ] Test.
 
 ## Changelog
 
-### v0.3.0
-- add `ssh -R` feature using yamux
+### v0.3.0-pre
+- add `ssh -R` feature using yamux (It just works, recommend to use existing projects like frp or rathole with `-L` mode)
+- more tests needed
 
 ### v0.2.1
 - add `x86_64-apple-darwin` support (not tested)
@@ -152,3 +151,4 @@ Thanks for these projects:
 - [snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream from this project for convenience
 and add some code for timeout when reading from handshake message.
 - [fast-socks5](https://github.com/dizda/fast-socks5), I use Socks5Socket from this library as a built-in SOCKS5 server.
+- [rust-yamux](https://github.com/libp2p/rust-yamux), I use yamux from this library to impl reverse proxy. .

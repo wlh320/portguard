@@ -2,7 +2,6 @@ use crate::consts::{CONF_BUF_LEN, PATTERN};
 use crate::{proxy};
 use bincode::Options;
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use futures::FutureExt;
 use log;
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
@@ -86,12 +85,7 @@ impl Client {
         let outbound = TcpStream::connect(conf.server_addr).await?;
         let enc_outbound = NoiseStream::handshake(outbound, initiator).await?;
         // transfer data
-        let transfer = proxy::transfer(inbound, enc_outbound).map(|r| {
-            if let Err(e) = r {
-                log::warn!("Transfer error occured. error={}", e);
-            }
-        });
-        transfer.await;
+        proxy::transfer_and_log_error(inbound, enc_outbound).await;
         Ok(())
     }
 
@@ -100,7 +94,6 @@ impl Client {
     pub async fn run_client_reverse_proxy(
         self,
         server_addr: Option<SocketAddr>,
-        // expose_addr: Option<SocketAddr>,
     ) -> Result<(), Box<dyn Error>> {
         // read client config, overwrite server address and expose address
         let mut conf: ClientConfig = bincode::options()
@@ -112,16 +105,10 @@ impl Client {
         }
         // must be valid address
         assert!(conf.target_addr.parse::<SocketAddr>().is_ok());
-        // if let Some(addr) = expose_addr {
-        // if let Remote::Rclient(_, id) = conf.target_addr {
-        // conf.target_addr = Remote::Rclient(addr, id);
-        // }
-        // }
         let shared_conf = Arc::new(conf);
         // log information
-        log::info!("Client exposing service on: 127.0.0.1:{}", self.port);
+        log::info!("Client exposing service on: {:?}", shared_conf.target_addr);
         log::info!("Portguard server on: {:?}", &shared_conf.server_addr);
-        log::info!("Target address: {:?}", shared_conf.target_addr);
         // start reverse proxy
         loop {
             let conf = shared_conf.clone();
@@ -142,11 +129,10 @@ impl Client {
         let conn = TcpStream::connect(&conf.server_addr).await?;
         let enc_conn = NoiseStream::handshake(conn, initiator).await?;
 
-        // yamux outbound stream and wait for incomming stream
+        // make yamux outbound stream and wait for incomming stream
         let yamux_config = yamux::Config::default();
         let mut yamux_conn =
             yamux::Connection::new(enc_conn.compat(), yamux_config, yamux::Mode::Server);
-
         while let Ok(Some(inbound)) = yamux_conn.next_stream().await {
             let conf = conf.clone();
             tokio::spawn(async move {
@@ -165,12 +151,7 @@ impl Client {
         log::info!("New incoming request, stream id {:?}", inbound.id());
         let expose_addr = &conf.target_addr.parse::<SocketAddr>().expect("Invalid target address");
         let outbound = TcpStream::connect(expose_addr).await?;
-        let transfer = proxy::transfer(inbound.compat(), outbound).map(|r| {
-            if let Err(e) = r {
-                log::warn!("Transfer error occured. error={}", e);
-            }
-        });
-        transfer.await;
+        proxy::transfer_and_log_error(inbound.compat(), outbound).await;
         Ok(())
     }
 
