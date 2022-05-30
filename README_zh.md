@@ -1,6 +1,6 @@
 # portguard
 
-一个功能类似 ssh 隧道 的加密端口转发工具，但客户端**零配置**.
+一个功能类似 ssh 隧道 的端口加密转发工具，但客户端**零配置**.
 
 作者还是个新手，不为代码中可能出现的安全缺陷负责.
 
@@ -24,11 +24,11 @@
 ```
 
 1. 服务端绑定公网IP的一个端口.
-2. 远端可以是其他的公网端口(google.com:443), 本地端口(127.0.0.1:port), 或者动态端口.
+2. 远端可以是其他的公网端口(google.com:443), 本地端口(127.0.0.1:port), 或者动态端口(socks5).
 3. 客户端可以工作于以下任一模式：
 	- `ssh -L`模式：通过服务端访问远端2的静态端口。
 	- `ssh -D`模式：通过服务端内置的socks5服务访问动态的远端2。
-	- `ssh -R`模式：将远端1的端口暴露给服务端并注册一个 _service id_。
+	- `ssh -R`模式：将远端1(固定端口或内建socks5)暴露给服务端并注册一个 _service id_。
 	- `ssh -R visitor` 模式：只有在此模式下具有相同 _service id_ 的客户端才能访问暴露的端口。
 4. 客户端与服务端通过`Noise_IK_25519_ChaChaPoly_BLAKE2s`协议握手.
 5. 随后客户端与服务端之间的流量加密传输.
@@ -121,15 +121,17 @@
 
 ## TODO
 
-- [ ] I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake.
+- [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature.
 - [x] Set remote address per client.
-- [ ] Improve performance.
+- [ ] Benchmark and improve performance.
+- [ ] When will a connection be closed?  Put it in logs.
 - [ ] Test.
 
 ## 更新日志
 
-### v0.3.0-pre
-- 添加 `ssh -R` 功能（只是可以工作，建议使用现有项目，如 frp 或 rathole 来配合 `-L` 模式）
+### v0.3.0-pre2
+- 添加 `ssh -R` 功能（只是可以工作，建议使用现有项目，如 frp 或 rathole， 配合 `-L` 模式使用）
+- 添加 `ssh -R` + `ssh -D` 功能（socks5 反向代理）
 - 需要更多测试
 
 ### v0.2.1

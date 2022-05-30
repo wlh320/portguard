@@ -1,7 +1,9 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::{proxy};
+use crate::proxy;
 use bincode::Options;
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+use fast_socks5::server::Socks5Socket;
+use futures::FutureExt;
 use log;
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
@@ -16,7 +18,7 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub server_addr: SocketAddr,
-    pub target_addr: String,
+    pub target_addr: String, // TODO: should be Remote::Target, but it is untagged, cannot be decoded by bincode
     pub server_pubkey: Vec<u8>,
     pub client_prikey: Vec<u8>,
 }
@@ -103,12 +105,15 @@ impl Client {
         if let Some(addr) = server_addr {
             conf.server_addr = addr;
         }
-        // must be valid address
-        assert!(conf.target_addr.parse::<SocketAddr>().is_ok());
+        // must be valid address: socket addr or "socks5"
+        assert!(
+            conf.target_addr.to_lowercase() == "socks5"
+                || conf.target_addr.parse::<SocketAddr>().is_ok()
+        );
         let shared_conf = Arc::new(conf);
         // log information
-        log::info!("Client exposing service on: {:?}", shared_conf.target_addr);
-        log::info!("Portguard server on: {:?}", &shared_conf.server_addr);
+        log::info!("Client exposing service on: {}", shared_conf.target_addr);
+        log::info!("Portguard server on: {}", shared_conf.server_addr);
         // start reverse proxy
         loop {
             let conf = shared_conf.clone();
@@ -120,7 +125,7 @@ impl Client {
         }
     }
 
-    pub async fn make_reverse_proxy_conn(&self, conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
+    async fn make_reverse_proxy_conn(&self, conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
         // make connection with server
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
@@ -143,18 +148,34 @@ impl Client {
         }
         Ok(())
     }
-
+    /// handle yamux connection requests
     async fn handle_reverse_client_connection(
         inbound: yamux::Stream,
         conf: &ClientConfig,
     ) -> Result<(), Box<dyn Error>> {
         log::info!("New incoming request, stream id {:?}", inbound.id());
-        let expose_addr = &conf.target_addr.parse::<SocketAddr>().expect("Invalid target address");
-        let outbound = TcpStream::connect(expose_addr).await?;
-        proxy::transfer_and_log_error(inbound.compat(), outbound).await;
+        if &conf.target_addr.to_lowercase() == "socks5" {
+            // target is socks5
+            let config = fast_socks5::server::Config::default();
+            let socket = Socks5Socket::new(inbound.compat(), Arc::new(config));
+            let transfer = socket.upgrade_to_socks5().map(|r| {
+                if let Err(e) = r {
+                    log::warn!("Transfer error occured. error={}", e);
+                }
+            });
+            transfer.await;
+        } else {
+            // target is socket addr
+            let expose_addr = &conf
+                .target_addr
+                .parse::<SocketAddr>()
+                .expect("Invalid target address");
+            let outbound = TcpStream::connect(expose_addr).await?;
+            proxy::transfer_and_log_error(inbound.compat(), outbound).await;
+        }
         Ok(())
     }
-
+    /// list current client public key
     pub fn list_pubkey(server: bool) -> Result<(), Box<dyn Error>> {
         let conf: ClientConfig = bincode::options()
             .with_limit(CONF_BUF_LEN as u64)

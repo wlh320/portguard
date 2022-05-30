@@ -1,6 +1,6 @@
 # portguard
 
-An encrypted port forwarding tool that just works like ssh tunnel, but **Zero Config** for client.
+A port forwarding tool with encryption and authentication that just works like ssh tunnel, but **Zero Config** for client.
 
 It is currently a simple project and the author is not familiar with security, we take no responsibility for any security flaws.
 
@@ -26,11 +26,11 @@ remote1 <-> client <-> server <-> remote2
 ```
 
 1. Server listens on public IP and a public port.
-2. Remote can be a remote port (google.com:443), a local port (127.0.0.1:xxxx), or dynamic.
+2. Remote can be a remote port (google.com:443), a local port (127.0.0.1:xxxx), or dynamic (socks5).
 3. Client works in any of the following modes:
 	- `ssh -L` mode: visit static port of remote2 through server.
 	- `ssh -D` mode: visit dynamic remote2 through server's builtin socks5 server.
-	- `ssh -R` mode: expose port of remote1 to server and register a _service id_.
+	- `ssh -R` mode: expose remote1 (port or dynamic) to server and register a _service id_.
 	- `ssh -R visitor` mode: only clients in this mode with same _service id_ can visit the exposed port.
 4. Client and server handshake using `Noise_IK_25519_ChaChaPoly_BLAKE2s`.
 5. Data transferred with encryption between client and server.
@@ -119,15 +119,17 @@ remote1 <-> client <-> server <-> remote2
 
 ## TODO
 
-- [ ] I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).
+- [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature.
 - [x] Set remote address per client.
 - [ ] Benchmark and improve performance.
+- [ ] When will a connection be closed? Put it in logs.
 - [ ] Test.
 
 ## Changelog
 
-### v0.3.0-pre
+### v0.3.0-pre2
 - add `ssh -R` feature using yamux (It just works, recommend to use existing projects like frp or rathole with `-L` mode)
+- add `ssh -R` + `ssh -D` feature (socks5 reverse proxy)
 - more tests needed
 
 ### v0.2.1

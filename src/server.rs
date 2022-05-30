@@ -1,7 +1,7 @@
 use crate::client::ClientConfig;
 use crate::consts::{CONF_BUF_LEN, PATTERN, RPROXY_CHAN_LEN};
 use crate::proxy;
-use crate::remote::Remote;
+use crate::remote::{Remote, Target};
 
 use bincode::Options;
 use fast_socks5::server::Socks5Socket;
@@ -80,7 +80,7 @@ fn default_host() -> String {
 }
 
 fn default_remote() -> Remote {
-    Remote::Socks5
+    Remote::Proxy(Target::Socks5)
 }
 
 impl ServerConfig {
@@ -224,8 +224,7 @@ impl Server {
         let remote = client_remote.unwrap_or(self.config.remote);
 
         match remote {
-            Remote::Addr(out_addr) => Self::proxy_to_remote(enc_inbound, out_addr).await?,
-            Remote::Socks5 => Self::proxy_to_socks5(enc_inbound).await?,
+            Remote::Proxy(target) => Self::proxy_to_target(enc_inbound, target).await?,
             Remote::Service(id) => {
                 tx.send(RproxyConn::Visitor(id, Box::new(enc_inbound)))
                     .await?
@@ -234,48 +233,42 @@ impl Server {
         };
         Ok(())
     }
-    async fn proxy_to_remote(
+    /// handle proxy
+    async fn proxy_to_target(
         inbound: NoiseStream<TcpStream>,
-        out_addr: SocketAddr,
+        target: Target,
     ) -> Result<(), Box<dyn Error>> {
-        log::info!(
-            "Start proxying {:?} to {:?}",
-            inbound.get_inner().peer_addr(),
-            out_addr
-        );
-        let outbound = TcpStream::connect(out_addr).await?;
-        proxy::transfer_and_log_error(inbound, outbound).await;
-        Ok(())
-    }
-    async fn proxy_to_socks5(inbound: NoiseStream<TcpStream>) -> Result<(), Box<dyn Error>> {
-        log::info!(
-            "Start proxying {:?} to built-in socks5 server",
-            inbound.get_inner().peer_addr(),
-        );
-        let socks5_config = fast_socks5::server::Config::default();
-        let config = Arc::new(socks5_config);
-        let socket = Socks5Socket::new(inbound, config);
-        let transfer = socket.upgrade_to_socks5().map(|r| {
-            if let Err(e) = r {
-                log::warn!("Transfer error occured. error={}", e);
+        let peer_addr = inbound.get_inner().peer_addr()?;
+        match target {
+            Target::Addr(addr) => {
+                log::info!("Start proxying {peer_addr} to {addr}");
+                let outbound = TcpStream::connect(addr).await?;
+                proxy::transfer_and_log_error(inbound, outbound).await;
             }
-        });
-        transfer.await;
+            Target::Socks5 => {
+                log::info!("Start proxying {peer_addr} to built-in socks5 server");
+                let config = fast_socks5::server::Config::default();
+                let socket = Socks5Socket::new(inbound, Arc::new(config));
+                let transfer = socket.upgrade_to_socks5().map(|r| {
+                    if let Err(e) = r {
+                        log::warn!("Transfer error occured. error={}", e);
+                    }
+                });
+                transfer.await;
+            }
+        }
         Ok(())
     }
+    /// create a new rproxy connection
     async fn create_rproxy_conn(
         inbound: NoiseStream<TcpStream>,
         id: usize,
-        expose_addr: SocketAddr,
+        target: Target,
         tx: Sender<RproxyConn>,
     ) -> Result<(), Box<dyn Error>> {
-        // TODO: incoming reverse client
-        log::info!(
-            "Start reverse proxy to {:?}:{:?} as a service (id {:?})",
-            inbound.get_inner().peer_addr(),
-            expose_addr,
-            id
-        );
+        let peer_addr = inbound.get_inner().peer_addr()?;
+        let target = target.to_string();
+        log::info!("Start reverse proxy to {peer_addr}:{target} as a service (id {id})",);
         let yamux_config = yamux::Config::default();
         let yamux_conn =
             yamux::Connection::new(inbound.compat(), yamux_config, yamux::Mode::Client);
@@ -288,8 +281,9 @@ impl Server {
         tx.send(RproxyConn::Client(id, control)).await?;
         Ok(())
     }
-
+    /// handle rproxy
     async fn handle_reverse_proxy(mut rx: Receiver<RproxyConn>) -> Result<(), Box<dyn Error>> {
+        // TODO: need improvement
         type Control = Arc<Mutex<yamux::Control>>;
         let mut conns: HashMap<usize, Control> = HashMap::new();
         while let Some(conn) = rx.recv().await {
