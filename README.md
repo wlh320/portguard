@@ -10,7 +10,7 @@ Welcome to create issues and pull requests.
 
 ## Use case
 
-- You need to expose local port to public ip with encryption and authorization.
+- You need to expose local port to public ip with encryption, and you just want specific users to visit it.
 - You don't like teaching your users how to config the client program.
 
 ## Features
@@ -151,4 +151,4 @@ Thanks for these projects:
 - [snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream from this project for convenience
 and add some code for timeout when reading from handshake message.
 - [fast-socks5](https://github.com/dizda/fast-socks5), I use Socks5Socket from this library as a built-in SOCKS5 server.
-- [rust-yamux](https://github.com/libp2p/rust-yamux), I use yamux from this library to impl reverse proxy. .
+- [rust-yamux](https://github.com/libp2p/rust-yamux), I use yamux from this library to impl reverse proxy.
