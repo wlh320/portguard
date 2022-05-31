@@ -84,32 +84,45 @@ remote1 <-> client <-> server <-> remote2
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
 
 	# works like ssh -L
-	# to generate this, run: ./portguard gen-cli -c config.toml -o cli -t 127.0.0.1:2333
-	[clients."qFGPs28K1hshENagjW3aKVXn4NrB7X2jftBue3SLRW0="]
-	name = 'proxy'
-	pubkey = 'qFGPs28K1hshENagjW3aKVXn4NrB7X2jftBue3SLRW0='
-	remote = '127.0.0.1:2333'
+	# to generate this, run: ./portguard gen-cli -c config.toml -o client -t 127.0.0.1:2333
+	[[clients]]
+	name = "normal"
+	pubkey = "dnso7kN2vhgLR/DVcAJRy1c9lRns3w7ESfB42szQWVI="
+	remote = "127.0.0.1:2333"
 
 	# works like ssh -D
-	# to generate this, run: ./portguard gen-cli -c config.toml -o cli_socks5 -t socks5
-	[clients."AIVbWCQQ0+VawQZk/AVjq2Ix9SagngxGXtEK26AUa3U="]
-	name = 'proxy_socks'
-	pubkey = 'AIVbWCQQ0+VawQZk/AVjq2Ix9SagngxGXtEK26AUa3U='
-	remote = 'socks5'
+	# to generate this, run: ./portguard gen-cli -c config.toml -o client_socks5 -t socks5
+	[[clients]]
+	name = "socks5"
+	pubkey = "+iOiRpafA8/QKVclKZHiRkDSAQv4USkuS5qFJWOT/wk="
+	remote = "socks5"
 
 	# works like ssh -R
-	# to generate this, run: ./portguard gen-cli -c config.toml -o rclient -s 1 -t 127.0.0.1:8000
-	[clients."h6M/DaKv5IOMM4Y2dkiZKpudQ5BCO5DvnNNWqZczGXs="]
-	name = 'reverse proxy client'
-	pubkey = 'h6M/DaKv5IOMM4Y2dkiZKpudQ5BCO5DvnNNWqZczGXs='
-	remote = ['127.0.0.1:8000', 1]
+	# to generate this, run: ./portguard gen-cli -c config.toml -o rclient -s 1 -t 127.0.0.1:2333
+	[[clients]]
+	name = "rclient"
+	pubkey = "kJqUC1fRRD9DW24zBmOkEKdEIX/EoSjfMeLxw2QvETI="
+	remote = ["127.0.0.1:2333", 1]
 
 	# in order to connect port exposed by ssh -R
 	# to generate this, run: ./portguard gen-cli -c config.toml -o rvisitor -s 1
-	[clients."Q5VqAyS9dl0CSrOnWOB9XmI0Kb1X83FL6iee3Iio9ls="]
-	name = 'reverse proxy visitor'
-	pubkey = 'Q5VqAyS9dl0CSrOnWOB9XmI0Kb1X83FL6iee3Iio9ls='
+	[[clients]]
+	name = "rvisitor"
+	pubkey = "t+Zb+pfnQ3aIaJZfz0wnnjrUNcW4t8HPzOYf7gEhURc="
 	remote = 1
+
+	# works like ssh (-R + -D)
+	# to generate this, run: ./portguard gen-cli -c config.toml -o rclient -s 2 -t socks5
+	[[clients]]
+	name = "rclient_socks5"
+	pubkey = "DHfFF3G+KFMHZjEiUwmTEo5+C2WZCtN+M0rirkgX/2c="
+	remote = ["socks5", 2]
+
+	# same as "rvisitor"
+	[[clients]]
+	name = "rvisitor_socks5"
+	pubkey = "vmdp+x5bhUkZKA3SGqA5Gv+VX8/XfutzrAfGxk+Q3zo="
+	remote = 2
 	```
 
 3. Run `portguard server -c config.toml` on server side.
@@ -124,8 +137,13 @@ remote1 <-> client <-> server <-> remote2
 - [ ] Benchmark and improve performance.
 - [ ] When will a connection be closed? Put it in logs.
 - [ ] Test.
+- [ ] UDP ?
 
 ## Changelog
+
+### v0.3.0
+- `--reverse` arguments is removed for client because role of client can be detected automatically.
+- clients in server config are now represented as set rather than map.
 
 ### v0.3.0-pre2
 - add `ssh -R` feature using yamux (It just works, recommend to use existing projects like frp or rathole with `-L` mode)

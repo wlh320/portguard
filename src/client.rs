@@ -19,8 +19,25 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 pub struct ClientConfig {
     pub server_addr: SocketAddr,
     pub target_addr: String, // TODO: should be Remote::Target, but it is untagged, cannot be decoded by bincode
+    pub reverse: bool,
     pub server_pubkey: Vec<u8>,
     pub client_prikey: Vec<u8>,
+}
+
+impl ClientConfig {
+    pub fn from_slice(bytes: &[u8]) -> Result<ClientConfig, bincode::Error> {
+        bincode::options()
+            .with_limit(CONF_BUF_LEN as u64)
+            .allow_trailing_bytes()
+            .deserialize(bytes)
+    }
+
+    pub fn to_vec(&self) -> Result<Vec<u8>, bincode::Error> {
+        bincode::options()
+            .with_limit(CONF_BUF_LEN as u64)
+            .allow_trailing_bytes()
+            .serialize(self)
+    }
 }
 
 #[cfg_attr(target_os = "linux", link_section = ".portguard")]
@@ -29,42 +46,40 @@ pub struct ClientConfig {
 #[used]
 pub static CLIENT_CONF_BUF: [u8; CONF_BUF_LEN] = [0; CONF_BUF_LEN];
 
-pub struct Client {
-    /// local port to listen
-    port: u16,
-}
+pub struct Client;
 
 impl Client {
-    pub fn new(port: u16) -> Client {
-        Client { port }
+    /// entrance of client program
+    pub async fn run_client(
+        port: u16,
+        server_addr: Option<SocketAddr>,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut conf = ClientConfig::from_slice(&CLIENT_CONF_BUF)?;
+        if let Some(addr) = server_addr {
+            conf.server_addr = addr;
+        }
+        let conf = Arc::new(conf);
+        match conf.reverse {
+            true => Self::run_client_reverse_proxy(conf).await,
+            false => Self::run_client_proxy(port, conf).await,
+        }
     }
 
     /// client type: visitor (addr, socks5, rproxy)
     /// in config: remote = "127.0.0.1:xxxx"
     ///     or     remote = "socks5"
     ///     or     remote = 66
-    pub async fn run_client_proxy(
-        self,
-        server_addr: Option<SocketAddr>,
-    ) -> Result<(), Box<dyn Error>> {
+    async fn run_client_proxy(port: u16, conf: Arc<ClientConfig>) -> Result<(), Box<dyn Error>> {
         // read client config, overwrite server address
-        let mut conf: ClientConfig = bincode::options()
-            .with_limit(CONF_BUF_LEN as u64)
-            .allow_trailing_bytes()
-            .deserialize(&CLIENT_CONF_BUF)?;
-        if let Some(addr) = server_addr {
-            conf.server_addr = addr;
-        }
         // log information
-        let shared_conf = Arc::new(conf);
-        let listen_addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
+        let listen_addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
         log::info!("Client listening on: {:?}", listen_addr);
-        log::info!("Portguard server on: {:?}", shared_conf.server_addr);
-        log::info!("Target address: {:?}", shared_conf.target_addr);
+        log::info!("Portguard server on: {:?}", conf.server_addr);
+        log::info!("Target address: {:?}", conf.target_addr);
         // start proxy
         let listener = TcpListener::bind(listen_addr).await?;
         while let Ok((inbound, _)) = listener.accept().await {
-            let conf = shared_conf.clone();
+            let conf = conf.clone();
             tokio::spawn(async move {
                 if let Err(e) = Client::handle_client_connection(inbound, &conf).await {
                     log::warn!("{}", e);
@@ -93,31 +108,19 @@ impl Client {
 
     /// client type: rclient (rproxy client)
     /// in config: remote = ["127.0.0.1:xxxx", 66]
-    pub async fn run_client_reverse_proxy(
-        self,
-        server_addr: Option<SocketAddr>,
-    ) -> Result<(), Box<dyn Error>> {
-        // read client config, overwrite server address and expose address
-        let mut conf: ClientConfig = bincode::options()
-            .with_limit(CONF_BUF_LEN as u64)
-            .allow_trailing_bytes()
-            .deserialize(&CLIENT_CONF_BUF)?;
-        if let Some(addr) = server_addr {
-            conf.server_addr = addr;
-        }
+    async fn run_client_reverse_proxy(conf: Arc<ClientConfig>) -> Result<(), Box<dyn Error>> {
         // must be valid address: socket addr or "socks5"
         assert!(
             conf.target_addr.to_lowercase() == "socks5"
                 || conf.target_addr.parse::<SocketAddr>().is_ok()
         );
-        let shared_conf = Arc::new(conf);
         // log information
-        log::info!("Client exposing service on: {}", shared_conf.target_addr);
-        log::info!("Portguard server on: {}", shared_conf.server_addr);
+        log::info!("Client exposing service on: {}", conf.target_addr);
+        log::info!("Portguard server on: {}", conf.server_addr);
         // start reverse proxy
         loop {
-            let conf = shared_conf.clone();
-            if let Err(e) = self.make_reverse_proxy_conn(&conf).await {
+            let conf = conf.clone();
+            if let Err(e) = Self::make_reverse_proxy_conn(&conf).await {
                 log::warn!("Failed to make reverse proxy connection. Error: {}", e);
             }
             // failed, wait and retry
@@ -125,7 +128,7 @@ impl Client {
         }
     }
 
-    async fn make_reverse_proxy_conn(&self, conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
+    async fn make_reverse_proxy_conn(conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
         // make connection with server
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
@@ -177,13 +180,13 @@ impl Client {
     }
     /// list current client public key
     pub fn list_pubkey(server: bool) -> Result<(), Box<dyn Error>> {
-        let conf: ClientConfig = bincode::options()
-            .with_limit(CONF_BUF_LEN as u64)
-            .allow_trailing_bytes()
-            .deserialize(&CLIENT_CONF_BUF)?;
-
+        let conf = ClientConfig::from_slice(&CLIENT_CONF_BUF)?;
         // derive pubkey
-        let privkey = Scalar::from_bits(conf.client_prikey.try_into().unwrap());
+        let privkey = Scalar::from_bits(
+            conf.client_prikey
+                .try_into()
+                .map_err(|_| "Got invalid privkey when deriving pubkey")?,
+        );
         let point = (&ED25519_BASEPOINT_TABLE * &privkey).to_montgomery();
         let pubkey = base64::encode(point.to_bytes());
         println!("Client pubkey: {:?}", pubkey);

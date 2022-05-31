@@ -43,7 +43,9 @@ macro_rules! named_unit_variant {
 mod strings {
     named_unit_variant!(socks5);
 }
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+
+/// Type for target address
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Target {
     /// target address is a socket address
@@ -61,8 +63,8 @@ impl ToString for Target {
     }
 }
 
-/// Type for identifying target remote address
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+/// Type for identifying remote
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Remote {
     /// visitor of remote address, for `ssh -L` or
@@ -75,7 +77,7 @@ pub enum Remote {
 }
 
 impl Remote {
-    /// if input only target, client can be addr or socks5
+    /// if input only target, client is proxy client
     fn from_target(target: &str) -> Result<Remote, AddrParseError> {
         if target.to_lowercase() == "socks5" {
             Ok(Remote::Proxy(Target::Socks5))
@@ -86,7 +88,11 @@ impl Remote {
                 .map(Remote::Proxy)
         }
     }
-    /// if input both target and id, client is rclient
+    /// if input only id, client is service visitor
+    fn from_id(id: usize) -> Remote {
+        Remote::Service(id)
+    }
+    /// if input both target and id, client is reverse proxy client
     fn from_target_and_id(target: &str, id: usize) -> Result<Remote, Box<dyn Error>> {
         if target.to_lowercase() == "socks5" {
             Ok(Remote::RProxy(Target::Socks5, id))
@@ -95,20 +101,16 @@ impl Remote {
             Ok(Remote::RProxy(Target::Addr(addr), id))
         }
     }
-    /// if input only id, client is rvisitor
-    fn from_id(id: usize) -> Remote {
-        Remote::Service(id)
-    }
-
-    pub fn try_parse(target: Option<String>, id: Option<usize>) -> Result<Remote, Box<dyn Error>> {
+    /// parse optional input
+    pub fn try_parse(target: Option<&str>, id: Option<usize>) -> Result<Remote, Box<dyn Error>> {
         match target {
             None => match id {
                 Some(id) => Ok(Remote::from_id(id)),
                 None => Err("No target address")?,
             },
             Some(target) => Ok(match id {
-                None => Remote::from_target(&target)?,
-                Some(id) => Remote::from_target_and_id(&target, id)?,
+                None => Remote::from_target(target)?,
+                Some(id) => Remote::from_target_and_id(target, id)?,
             }),
         }
     }
@@ -119,7 +121,7 @@ impl ToString for Remote {
         match self {
             Remote::Proxy(t) => t.to_string(),
             Remote::Service(id) => format!("(sid {})", id),
-            Remote::RProxy(a, _id) => a.to_string(),
+            Remote::RProxy(t, _id) => t.to_string(),
         }
     }
 }

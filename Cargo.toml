@@ -1,6 +1,6 @@
 [package]
 name = "portguard"
-version = "0.3.0-pre2"
+version = "0.3.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -11,7 +11,7 @@ env_logger = "0.8.4"
 memmap2 = "0.5.3"
 object = "0.28.3"
 clap = { version = "3.1.8", features = ["derive", "env"] }
-tokio = { version = "1.17.0", features = ["rt-multi-thread", "io-util", "macros", "net", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-util", "macros", "net", "time", "sync"] }
 futures = "0.3"
 snowstorm = { path = "snowstorm", version = "0.3.1" }
 fast-socks5 = "0.8.0"

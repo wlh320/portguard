@@ -3,18 +3,19 @@ use crate::consts::{CONF_BUF_LEN, PATTERN, RPROXY_CHAN_LEN};
 use crate::proxy;
 use crate::remote::{Remote, Target};
 
-use bincode::Options;
 use fast_socks5::server::Socks5Socket;
 use futures::lock::Mutex;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 use log;
 use memmap2::MmapOptions;
 use object::{BinaryFormat, File, Object, ObjectSection};
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
-use std::collections::HashMap;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::{self, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -38,7 +39,7 @@ mod base64_serde {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Eq, Debug, Clone, Serialize, Deserialize)]
 struct ClientEntry {
     /// user name
     name: String,
@@ -49,6 +50,22 @@ struct ClientEntry {
     remote: Option<Remote>,
 }
 
+impl PartialEq for ClientEntry {
+    fn eq(&self, other: &ClientEntry) -> bool {
+        self.pubkey == other.pubkey
+    }
+}
+impl Hash for ClientEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.pubkey.hash(state);
+    }
+}
+impl Borrow<[u8]> for ClientEntry {
+    fn borrow(&self) -> &[u8] {
+        &self.pubkey
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// server public ip or domain
@@ -56,7 +73,7 @@ pub struct ServerConfig {
     host: String,
     /// server listen port
     #[serde(default = "default_port")]
-    pub port: u16,
+    port: u16,
     /// default remote address hope to proxy
     #[serde(default = "default_remote")]
     remote: Remote,
@@ -66,9 +83,9 @@ pub struct ServerConfig {
     /// server private key
     #[serde(with = "base64_serde", default)]
     prikey: Vec<u8>,
-    #[serde(serialize_with = "toml::ser::tables_last", default)]
-    /// infomation of clients
-    clients: HashMap<String, ClientEntry>,
+    /// sequence of clients
+    #[serde(skip_serializing_if = "HashSet::is_empty", default)]
+    clients: HashSet<ClientEntry>,
 }
 
 fn default_port() -> u16 {
@@ -85,7 +102,7 @@ fn default_remote() -> Remote {
 
 impl ServerConfig {
     fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
-        let content = toml::ser::to_string_pretty(self)?;
+        let content = toml::ser::to_string(self)?;
         std::fs::write(path, content)?;
         Ok(())
     }
@@ -117,13 +134,15 @@ impl Server {
         in_path: P,
         out_path: P,
         username: String,
-        remote: Option<Remote>,
+        oremote: Option<Remote>,
     ) -> Result<(), Box<dyn Error>> {
         // 1. set client config
         let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
+        let remote = oremote.unwrap_or(self.config.remote);
         let cli_conf: ClientConfig = ClientConfig {
             server_addr: format!("{}:{}", self.config.host, self.config.port).parse()?,
-            target_addr: remote.unwrap_or(self.config.remote).to_string(),
+            target_addr: remote.to_string(),
+            reverse: matches!(remote, Remote::RProxy(_, _)),
             server_pubkey: self.config.pubkey.clone(),
             client_prikey: key.private,
         };
@@ -155,10 +174,11 @@ impl Server {
         let client = ClientEntry {
             name: username,
             pubkey: key.public,
-            remote,
+            remote: oremote,
         };
-        let ent = self.config.clients.entry(base64::encode(&client.pubkey));
-        ent.or_insert(client);
+        // let ent = self.config.clients.entry(base64::encode(&client.pubkey));
+        // ent.or_insert(client);
+        self.config.clients.insert(client);
         // 5. save server config
         self.config.save(&self.config_path)?;
         Ok(())
@@ -212,17 +232,15 @@ impl Server {
             .local_private_key(&self.config.prikey)
             .build_responder()?;
         let enc_inbound = NoiseStream::handshake_with_verifier(inbound, responder, |key| {
-            let token = base64::encode(key);
-            self.config.clients.contains_key(&token)
+            self.config.clients.contains(key)
         })
         .await?;
-        let token = base64::encode(enc_inbound.get_state().get_remote_static().unwrap());
         // at this point, client already passed verification
         // can use `.unwrap()` here because client must have a static key
-        let client_remote = self.config.clients.get(&token).unwrap().remote;
+        let token = enc_inbound.get_state().get_remote_static().unwrap();
+        let client_remote = self.config.clients.get(token).unwrap().remote;
         // if it specifies a remote address, use it
         let remote = client_remote.unwrap_or(self.config.remote);
-
         match remote {
             Remote::Proxy(target) => Self::proxy_to_target(enc_inbound, target).await?,
             Remote::Service(id) => {
@@ -274,22 +292,19 @@ impl Server {
             yamux::Connection::new(inbound.compat(), yamux_config, yamux::Mode::Client);
         let control = yamux_conn.control();
         // TODO: dont know why yamux client needs to do this.
-        tokio::task::spawn({
-            use futures::StreamExt;
-            yamux::into_stream(yamux_conn).for_each(|_| async {})
-        });
+        tokio::task::spawn(yamux::into_stream(yamux_conn).for_each(|_| async {}));
         tx.send(RproxyConn::Client(id, control)).await?;
         Ok(())
     }
     /// handle rproxy
     async fn handle_reverse_proxy(mut rx: Receiver<RproxyConn>) -> Result<(), Box<dyn Error>> {
         // TODO: need improvement
-        type Control = Arc<Mutex<yamux::Control>>;
+        type Control = Mutex<yamux::Control>;
         let mut conns: HashMap<usize, Control> = HashMap::new();
         while let Some(conn) = rx.recv().await {
             match conn {
                 RproxyConn::Client(id, ctrl) => {
-                    conns.insert(id, Arc::new(Mutex::new(ctrl)));
+                    conns.insert(id, Mutex::new(ctrl));
                 }
                 RproxyConn::Visitor(id, inbound) => {
                     log::info!(
@@ -317,11 +332,7 @@ impl Server {
 }
 
 fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], Box<dyn Error>> {
-    let v = bincode::options()
-        .with_limit(CONF_BUF_LEN as u64)
-        .allow_trailing_bytes()
-        .serialize(&conf)?;
-    // let v = &bincode::serialize(&conf)?;
+    let v = conf.to_vec()?;
     let mut bytes: [u8; CONF_BUF_LEN] = [0; CONF_BUF_LEN];
     bytes[..v.len()].clone_from_slice(&v[..]);
     Ok(bytes)

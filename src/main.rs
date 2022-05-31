@@ -27,9 +27,6 @@ struct ClientArgs {
     /// use another server address in this run
     #[clap(short, long)]
     server: Option<String>,
-    /// whether a reverse proxy client
-    #[clap(short, long)]
-    reverse: bool,
 }
 
 #[derive(Subcommand)]
@@ -81,18 +78,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     let client_cmd = cli.command.unwrap_or(Commands::Client(cli.client));
     match client_cmd {
-        Commands::Client(ClientArgs {
-            port,
-            server,
-            reverse,
-        }) => {
-            let client = Client::new(port);
-            let server = server.and_then(|s| s.parse().ok());
-            if reverse {
-                client.run_client_reverse_proxy(server).await?;
-            } else {
-                client.run_client_proxy(server).await?;
-            }
+        Commands::Client(ClientArgs { port, server }) => {
+            let server_addr = server.and_then(|s| s.parse().ok());
+            Client::run_client(port, server_addr).await?;
         }
         Commands::Server { config: path } => {
             let content = std::fs::read_to_string(&path)?;
@@ -111,9 +99,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let in_path = in_path.unwrap_or(env::current_exe()?);
             let content = std::fs::read_to_string(&path)?;
             let config = toml::de::from_str(&content)?;
-            let remote = Remote::try_parse(target, service)
+            let remote = Remote::try_parse(target.as_deref(), service)
                 .map_err(|e| {
-                    log::warn!("Invalid remote input, use default, error {}", e);
+                    log::warn!("Invalid remote input, use default. Error {}", e);
                 })
                 .ok();
 
@@ -141,7 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     env_logger::init();
     run().await.map_err(|e| {
-        log::error!("{:?}", e);
+        log::error!("Error occured: {}", e);
         e
     })
 }
