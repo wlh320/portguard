@@ -1,0 +1,5 @@
+host = "127.0.0.1"
+port = 8848
+remote = "socks5"
+pubkey = "53Jw+LG5O0hVTvSRN3mqq200p0J3qnCvXGjDhBIogyk="
+prikey = "UJ6NROdUjDxMlARghggiMsMqQ6MgnDFscYxxJO+SMEU="

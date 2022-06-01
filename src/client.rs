@@ -1,5 +1,5 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::proxy;
+use crate::{gen, proxy};
 use bincode::Options;
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use fast_socks5::server::Socks5Socket;
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
 use std::error::Error;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -194,6 +195,17 @@ impl Client {
             let key = base64::encode(conf.server_pubkey);
             println!("Server pubkey: {:?}", key);
         }
+        Ok(())
+    }
+    /// generate client binary with a new keypair
+    pub fn modify_client_keypair<P: AsRef<Path>>(in_path: P, out_path: P) -> Result<(), Box<dyn Error>> {
+        let keypair = gen::gen_keypair()?;
+        let mod_conf = move |old_conf: ClientConfig| ClientConfig {
+            client_prikey: keypair.private,
+            ..old_conf
+        };
+        // 2. gen new client binary
+        gen::gen_client_binary(in_path, out_path, mod_conf)?;
         Ok(())
     }
 }

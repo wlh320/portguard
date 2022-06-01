@@ -72,6 +72,15 @@ enum Commands {
         #[clap(short, long)]
         server: bool,
     },
+    /// Modify a client with a new keypair
+    ModCli {
+        /// location of input binary (current binary by default)
+        #[clap(short, long)]
+        input: Option<PathBuf>,
+        /// location of output binary
+        #[clap(short, long)]
+        output: PathBuf,
+    },
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
@@ -117,6 +126,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         Commands::ListKey { server } => {
             Client::list_pubkey(server)?;
+        }
+        Commands::ModCli {
+            input: in_path,
+            output: out_path,
+        } => {
+            let in_path = in_path.unwrap_or(env::current_exe()?);
+            Client::modify_client_keypair(in_path, out_path)?;
         }
     }
     Ok(())

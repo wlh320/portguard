@@ -1,5 +1,6 @@
 use crate::client::ClientConfig;
-use crate::consts::{CONF_BUF_LEN, PATTERN, RPROXY_CHAN_LEN};
+use crate::consts::{PATTERN, RPROXY_CHAN_LEN};
+use crate::gen;
 use crate::proxy;
 use crate::remote::{Remote, Target};
 
@@ -7,14 +8,11 @@ use fast_socks5::server::Socks5Socket;
 use futures::lock::Mutex;
 use futures::{FutureExt, StreamExt};
 use log;
-use memmap2::MmapOptions;
-use object::{BinaryFormat, File, Object, ObjectSection};
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -129,6 +127,7 @@ impl Server {
             config_path: path.to_owned(),
         }
     }
+
     pub fn gen_client<P: AsRef<Path>>(
         &mut self,
         in_path: P,
@@ -137,58 +136,34 @@ impl Server {
         oremote: Option<Remote>,
     ) -> Result<(), Box<dyn Error>> {
         // 1. set client config
-        let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
+        let keypair = gen::gen_keypair()?;
         let remote = oremote.unwrap_or(self.config.remote);
         let cli_conf: ClientConfig = ClientConfig {
             server_addr: format!("{}:{}", self.config.host, self.config.port).parse()?,
             target_addr: remote.to_string(),
             reverse: matches!(remote, Remote::RProxy(_, _)),
             server_pubkey: self.config.pubkey.clone(),
-            client_prikey: key.private,
+            client_prikey: keypair.private,
         };
-
-        // 2. crate new binary
-        let new_exe = in_path.as_ref().with_extension("tmp");
-        fs::copy(&in_path, &new_exe)?;
-        let file = OpenOptions::new().read(true).write(true).open(&new_exe)?;
-        let mut buf = unsafe { MmapOptions::new().map_mut(&file) }?;
-        let file = File::parse(&*buf)?;
-
-        // 3. save config to new binary
-        if let Some(range) = get_client_config_section(&file) {
-            log::debug!("Copying config to client");
-            assert_eq!(range.1, CONF_BUF_LEN as u64);
-
-            let conf_buf = serialize_conf_to_buf(&cli_conf)?;
-            let base = range.0 as usize;
-            buf[base..(base + CONF_BUF_LEN)].copy_from_slice(&conf_buf);
-
-            let perms = fs::metadata(in_path)?.permissions();
-            fs::set_permissions(&new_exe, perms)?;
-            fs::rename(&new_exe, out_path)?;
-        } else {
-            fs::remove_file(&new_exe)?;
-        }
-
-        // 4. add new client to server config
+        // 2. gen client binary
+        gen::gen_client_binary(in_path, out_path, |_| cli_conf)?;
+        // 3. add new client to server config
         let client = ClientEntry {
             name: username,
-            pubkey: key.public,
+            pubkey: keypair.public,
             remote: oremote,
         };
-        // let ent = self.config.clients.entry(base64::encode(&client.pubkey));
-        // ent.or_insert(client);
         self.config.clients.insert(client);
-        // 5. save server config
+        // 4. save server config
         self.config.save(&self.config_path)?;
         Ok(())
     }
 
     pub fn gen_key(&mut self) -> Result<(), Box<dyn Error>> {
         // gen key
-        let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
-        self.config.pubkey = key.public;
-        self.config.prikey = key.private;
+        let keypair = gen::gen_keypair()?;
+        self.config.pubkey = keypair.public;
+        self.config.prikey = keypair.private;
         // save
         self.config.save(&self.config_path)?;
         Ok(())
@@ -329,29 +304,4 @@ impl Server {
         }
         Ok(())
     }
-}
-
-fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], Box<dyn Error>> {
-    let v = conf.to_vec()?;
-    let mut bytes: [u8; CONF_BUF_LEN] = [0; CONF_BUF_LEN];
-    bytes[..v.len()].clone_from_slice(&v[..]);
-    Ok(bytes)
-}
-
-fn get_client_config_section(file: &File) -> Option<(u64, u64)> {
-    let name = match file.format() {
-        BinaryFormat::Elf => ".portguard",
-        BinaryFormat::Pe => "pgmodify",
-        BinaryFormat::MachO => "__portguard",
-        _ => todo!(),
-    };
-    for section in file.sections() {
-        match section.name() {
-            Ok(n) if n == name => {
-                return section.file_range();
-            }
-            _ => {}
-        }
-    }
-    None
 }
