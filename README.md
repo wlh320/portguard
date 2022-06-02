@@ -131,7 +131,7 @@ remote1 <-> client <-> server <-> remote2
 3. Run `portguard server -c config.toml` on server side.
 
 4. Run generated binary on client side without any configs
-(local port or server address can be customized with `pgcli -p port -s saddr:sport` if you like).
+(local port or server address can be customized with `portguard client -p port -s saddr:sport` if you like).
 
 Suggestions:
 - (since v0.3.1) When generating clients, use `pgcli` as input file to reduce file size (size of client is about 2MB).
