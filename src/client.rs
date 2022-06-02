@@ -1,6 +1,7 @@
 use crate::consts::{CONF_BUF_LEN, PATTERN};
 use crate::{gen, proxy};
 use bincode::Options;
+use blake2::{Blake2s256, Digest};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use fast_socks5::server::Socks5Socket;
 use futures::FutureExt;
@@ -12,6 +13,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
@@ -125,19 +127,41 @@ impl Client {
                 log::warn!("Failed to make reverse proxy connection. Error: {}", e);
             }
             // failed, wait and retry
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 
-    async fn make_reverse_proxy_conn(conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
-        // make connection with server
+    async fn try_handshake(conf: &ClientConfig) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
             .local_private_key(&conf.client_prikey)
             .build_initiator()?;
         let conn = TcpStream::connect(&conf.server_addr).await?;
-        let enc_conn = NoiseStream::handshake(conn, initiator).await?;
+        let mut enc_conn = NoiseStream::handshake(conn, initiator).await?;
+        // verify hash
+        // if verification failed, we hope to abort program, so unwrap() is ok
+        let mut hasher = Blake2s256::new();
+        hasher.update(std::fs::read(std::env::current_exe().unwrap()).unwrap());
+        let res = hasher.finalize();
+        enc_conn.write_all(&res).await?;
+        let ret = enc_conn.read_u8().await?;
+        if ret != 66 {
+            Err("Client hash is denied by server")?
+        }
+        Ok(enc_conn)
+    }
 
+    async fn make_reverse_proxy_conn(conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
+        // make connection with server
+        log::info!("Trying to connect to server...");
+        let enc_conn = match Self::try_handshake(conf).await {
+            Ok(conn) => conn,
+            Err(e) => {
+                log::error!("Handshake failed. Error: {e}");
+                panic!("Handshake over");
+            }
+        };
+        log::info!("Handshake over");
         // make yamux outbound stream and wait for incomming stream
         let yamux_config = yamux::Config::default();
         let mut yamux_conn =
@@ -198,14 +222,17 @@ impl Client {
         Ok(())
     }
     /// generate client binary with a new keypair
-    pub fn modify_client_keypair<P: AsRef<Path>>(in_path: P, out_path: P) -> Result<(), Box<dyn Error>> {
+    pub fn modify_client_keypair<P: AsRef<Path>>(
+        in_path: P,
+        out_path: P,
+    ) -> Result<(), Box<dyn Error>> {
         let keypair = gen::gen_keypair()?;
         let mod_conf = move |old_conf: ClientConfig| ClientConfig {
             client_prikey: keypair.private,
             ..old_conf
         };
         // 2. gen new client binary
-        gen::gen_client_binary(in_path, out_path, mod_conf)?;
+        gen::gen_client_binary(in_path.as_ref(), out_path.as_ref(), mod_conf)?;
         Ok(())
     }
 }

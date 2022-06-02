@@ -1,9 +1,10 @@
 use crate::client::ClientConfig;
-use crate::consts::{PATTERN, RPROXY_CHAN_LEN};
+use crate::consts::{PATTERN, RPROXY_CHAN_LEN, FILEHASH_LEN};
 use crate::gen;
 use crate::proxy;
 use crate::remote::{Remote, Target};
 
+use blake2::{Blake2s256, Digest};
 use fast_socks5::server::Socks5Socket;
 use futures::lock::Mutex;
 use futures::{FutureExt, StreamExt};
@@ -17,6 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -37,13 +39,22 @@ mod base64_serde {
     }
 }
 
-#[derive(Eq, Debug, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+struct FileHash {
+    #[serde(with = "base64_serde")]
+    hash: Vec<u8>,
+}
+
+#[derive(Eq, Debug, Serialize, Deserialize)]
 struct ClientEntry {
     /// user name
     name: String,
     /// client public key for auth
     #[serde(with = "base64_serde")]
     pubkey: Vec<u8>,
+    /// file hash, for verifying reverse proxy
+    #[serde(flatten)]
+    filehash: Option<FileHash>,
     /// client specified remote address
     remote: Option<Remote>,
 }
@@ -138,20 +149,30 @@ impl Server {
         // 1. set client config
         let keypair = gen::gen_keypair()?;
         let remote = oremote.unwrap_or(self.config.remote);
+        let reverse = matches!(remote, Remote::RProxy(_, _));
         let cli_conf: ClientConfig = ClientConfig {
             server_addr: format!("{}:{}", self.config.host, self.config.port).parse()?,
             target_addr: remote.to_string(),
-            reverse: matches!(remote, Remote::RProxy(_, _)),
+            reverse,
             server_pubkey: self.config.pubkey.clone(),
             client_prikey: keypair.private,
         };
         // 2. gen client binary
-        gen::gen_client_binary(in_path, out_path, |_| cli_conf)?;
+        gen::gen_client_binary(in_path.as_ref(), out_path.as_ref(), |_| cli_conf)?;
+        let filehash = if reverse {
+            let mut hasher = Blake2s256::new();
+            hasher.update(std::fs::read(out_path.as_ref()).unwrap());
+            let res = hasher.finalize();
+            Some(FileHash { hash: res.to_vec() })
+        } else {
+            None
+        };
         // 3. add new client to server config
         let client = ClientEntry {
             name: username,
             pubkey: keypair.public,
             remote: oremote,
+            filehash
         };
         self.config.clients.insert(client);
         // 4. save server config
@@ -206,7 +227,7 @@ impl Server {
         let responder = snowstorm::Builder::new(PATTERN.parse()?)
             .local_private_key(&self.config.prikey)
             .build_responder()?;
-        let enc_inbound = NoiseStream::handshake_with_verifier(inbound, responder, |key| {
+        let mut enc_inbound = NoiseStream::handshake_with_verifier(inbound, responder, |key| {
             self.config.clients.contains(key)
         })
         .await?;
@@ -222,7 +243,21 @@ impl Server {
                 tx.send(RproxyConn::Visitor(id, Box::new(enc_inbound)))
                     .await?
             }
-            Remote::RProxy(addr, id) => Self::create_rproxy_conn(enc_inbound, id, addr, tx).await?,
+            Remote::RProxy(addr, id) => {
+                // verify hash of client
+                let mut buf: [u8; FILEHASH_LEN] = [0; FILEHASH_LEN];
+                let real_hash = self.config.clients.get(token).unwrap().filehash.clone();
+                enc_inbound.read_exact(&mut buf).await?;
+                if real_hash.map_or(false, |f| f.hash == buf) {
+                    log::debug!("filehash verify passed, received: {:?}", &buf);
+                    enc_inbound.write_u8(66).await?;
+                } else {
+                    log::debug!("filehash verify failed, received: {:?}", &buf);
+                    enc_inbound.write_u8(0).await?;
+                    Err("This client has an invalid hash")?
+                }
+                Self::create_rproxy_conn(enc_inbound, id, addr, tx).await?
+            }
         };
         Ok(())
     }

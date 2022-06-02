@@ -39,16 +39,16 @@ pub fn gen_keypair() -> Result<Keypair, snowstorm::snow::Error> {
     Ok(key)
 }
 
-pub fn gen_client_binary<P: AsRef<Path>, F>(
-    in_path: P,
-    out_path: P,
+pub fn gen_client_binary<F>(
+    in_path: &Path,
+    out_path: &Path,
     mod_conf: F,
 ) -> Result<(), Box<dyn Error>>
 where
     F: FnOnce(ClientConfig) -> ClientConfig,
 {
     // 1. crate new binary
-    let new_exe = in_path.as_ref().with_extension("tmp");
+    let new_exe = in_path.with_extension("tmp");
     fs::copy(&in_path, &new_exe)?;
     let file = OpenOptions::new().read(true).write(true).open(&new_exe)?;
     let mut buf = unsafe { MmapOptions::new().map_mut(&file) }?;
