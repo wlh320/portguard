@@ -120,7 +120,7 @@ impl ToString for Remote {
     fn to_string(&self) -> String {
         match self {
             Remote::Proxy(t) => t.to_string(),
-            Remote::Service(id) => format!("(sid {})", id),
+            Remote::Service(id) => format!("service (id: {})", id),
             Remote::RProxy(t, _id) => t.to_string(),
         }
     }

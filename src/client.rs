@@ -158,10 +158,10 @@ impl Client {
             Ok(conn) => conn,
             Err(e) => {
                 log::error!("Handshake failed. Error: {e}");
-                panic!("Handshake over");
+                panic!("Handshake failed");
             }
         };
-        log::info!("Handshake over");
+        log::info!("Handshake succeeded.");
         // make yamux outbound stream and wait for incomming stream
         let yamux_config = yamux::Config::default();
         let mut yamux_conn =

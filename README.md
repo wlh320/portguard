@@ -85,6 +85,7 @@ remote1 <-> client <-> server <-> remote2
 
 	# works like ssh -L
 	# to generate this, run: ./portguard gen-cli -c config.toml -o client -t 127.0.0.1:2333
+	# `name` field does nothing to auth, just for admin of server to distinguish clients
 	[[clients]]
 	name = "normal"
 	pubkey = "dnso7kN2vhgLR/DVcAJRy1c9lRns3w7ESfB42szQWVI="
@@ -102,6 +103,7 @@ remote1 <-> client <-> server <-> remote2
 	[[clients]]
 	name = "rclient"
 	pubkey = "kJqUC1fRRD9DW24zBmOkEKdEIX/EoSjfMeLxw2QvETI="
+	hash = "6jgZoM/RyNHG7QxzLwcij32RjFYHGOGIsUBGG9n9ah8="
 	remote = ["127.0.0.1:2333", 1]
 
 	# in order to connect port exposed by ssh -R
@@ -116,6 +118,7 @@ remote1 <-> client <-> server <-> remote2
 	[[clients]]
 	name = "rclient_socks5"
 	pubkey = "DHfFF3G+KFMHZjEiUwmTEo5+C2WZCtN+M0rirkgX/2c="
+	hash = "I4Ws+fmbuYEVc+zux8IqreY02EPw5KFuOx/hLDirH5s="
 	remote = ["socks5", 2]
 
 	# same as "rvisitor"
@@ -130,6 +133,10 @@ remote1 <-> client <-> server <-> remote2
 4. Run generated binary on client side without any configs
 (local port or server address can be customized with `pgcli -p port -s saddr:sport` if you like).
 
+Suggestions:
+- (since v0.3.1) When generating clients, use `pgcli` as input file to reduce file size (size of client is about 2MB).
+- Can compress generated clients using `upx`, but the builtin config of client after compressed is unchangeable (700kB after compressed).
+
 ## TODO
 
 - [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature.
@@ -140,6 +147,12 @@ remote1 <-> client <-> server <-> remote2
 - [ ] UDP ?
 
 ## Changelog
+
+### v0.3.1
+- before starting proxying, server will check filehash of reverse proxy client.
+- add a minimal client-only binary named `pgcli` for reducing file size in client side.
+- add a new subcommand `mod-cli` to re-generate existing client's keypair.
+- change default listening port of client to `8022`
 
 ### v0.3.0
 - `--reverse` arguments is removed for client because role of client can be detected automatically.

@@ -22,7 +22,7 @@ struct Cli {
 #[derive(Debug, Args)]
 struct ClientArgs {
     /// local port to listen
-    #[clap(short, long, default_value_t = 6000)]
+    #[clap(short, long, default_value_t = 8022)]
     port: u16,
     /// use another server address in this run
     #[clap(short, long)]

@@ -1,6 +1,6 @@
 [package]
 name = "portguard"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -26,4 +26,5 @@ blake2 = "0.10.4"
 
 [profile.release]
 strip = true
-lto = true # file size
+lto = true # for file size
+codegen-units = 1 # for file size

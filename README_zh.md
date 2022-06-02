@@ -82,42 +82,45 @@
 	pubkey = '1y3HW8TDxChtke5nyEdLGj+OkQSg8JjLdalSHzD+aWI='
 	prikey = 'eHg7jR/IZwEZEqeyR27IUTN0py5a3+wP0uM+z9HeWn8='
 
-	# works like ssh -L
-	# to generate this, run: ./portguard gen-cli -c config.toml -o client -t 127.0.0.1:2333
+	# 客户端工作模式：ssh -L
+	# 生成客户端命令：./portguard gen-cli -c config.toml -o client -t 127.0.0.1:2333
+	# name 只是一个方便区分的标识，可以手动更改，对实际运行不起任何作用
 	[[clients]]
 	name = "normal"
 	pubkey = "dnso7kN2vhgLR/DVcAJRy1c9lRns3w7ESfB42szQWVI="
 	remote = "127.0.0.1:2333"
 
-	# works like ssh -D
-	# to generate this, run: ./portguard gen-cli -c config.toml -o client_socks5 -t socks5
+	# 客户端工作模式：ssh -D
+	# 生成客户端命令：./portguard gen-cli -c config.toml -o client_socks5 -t socks5
 	[[clients]]
 	name = "socks5"
 	pubkey = "+iOiRpafA8/QKVclKZHiRkDSAQv4USkuS5qFJWOT/wk="
 	remote = "socks5"
 
-	# works like ssh -R
-	# to generate this, run: ./portguard gen-cli -c config.toml -o rclient -s 1 -t 127.0.0.1:2333
+	# 客户端工作模式：ssh -R
+	# 生成客户端命令：./portguard gen-cli -c config.toml -o rclient -s 1 -t 127.0.0.1:2333
 	[[clients]]
 	name = "rclient"
 	pubkey = "kJqUC1fRRD9DW24zBmOkEKdEIX/EoSjfMeLxw2QvETI="
+	hash = "6jgZoM/RyNHG7QxzLwcij32RjFYHGOGIsUBGG9n9ah8="
 	remote = ["127.0.0.1:2333", 1]
 
-	# in order to connect port exposed by ssh -R
-	# to generate this, run: ./portguard gen-cli -c config.toml -o rvisitor -s 1
+	# 客户端工作模式：访问 ssh -R
+	# 生成客户端命令：./portguard gen-cli -c config.toml -o rvisitor -s 1
 	[[clients]]
 	name = "rvisitor"
 	pubkey = "t+Zb+pfnQ3aIaJZfz0wnnjrUNcW4t8HPzOYf7gEhURc="
 	remote = 1
 
-	# works like ssh (-R + -D)
-	# to generate this, run: ./portguard gen-cli -c config.toml -o rclient -s 2 -t socks5
+	# 客户端工作模式：ssh (-R + -D)
+	# 生成客户端命令：./portguard gen-cli -c config.toml -o rclient -s 2 -t socks5
 	[[clients]]
 	name = "rclient_socks5"
 	pubkey = "DHfFF3G+KFMHZjEiUwmTEo5+C2WZCtN+M0rirkgX/2c="
+	hash = "I4Ws+fmbuYEVc+zux8IqreY02EPw5KFuOx/hLDirH5s="
 	remote = ["socks5", 2]
 
-	# same as "rvisitor"
+	# 与之前的 "rvisitor" 一样，只是访问的服务不同
 	[[clients]]
 	name = "rvisitor_socks5"
 	pubkey = "vmdp+x5bhUkZKA3SGqA5Gv+VX8/XfutzrAfGxk+Q3zo="
@@ -132,6 +135,10 @@
 
 5. 所有的 TCP 流量都会被加密转发.
 
+使用建议：
+- (since v0.3.1) 生成客户端时，用只有客户端功能的二进制 `pgcli` 作为输入，以减小体积 (客户端大小约 2M)
+- 生成后的客户端可以用 `upx` 压缩进一步减小体积，但压缩后配置无法再更改. (大小约 700kB)
+
 ## TODO
 
 - [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature.
@@ -142,6 +149,11 @@
 - [ ] UDP?
 
 ## 更新日志
+
+### v0.3.1
+- 开始转发前，服务端会对反向代理模式的客户端的文件哈希进行验证
+- 新增了一个只有客户端功能的二进制文件 `pgcli`, 用于尽可能减小客户端体积
+- 增加了一个子命令 `mod-cli` 用于重新生成已有客户端的密钥
 
 ### v0.3.0
 - 客户端不再需要`--reverse`参数，改为自动判断

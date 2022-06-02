@@ -1,5 +1,5 @@
 use crate::client::ClientConfig;
-use crate::consts::{PATTERN, RPROXY_CHAN_LEN, FILEHASH_LEN};
+use crate::consts::{FILEHASH_LEN, PATTERN, RPROXY_CHAN_LEN};
 use crate::gen;
 use crate::proxy;
 use crate::remote::{Remote, Target};
@@ -172,7 +172,7 @@ impl Server {
             name: username,
             pubkey: keypair.public,
             remote: oremote,
-            filehash
+            filehash,
         };
         self.config.clients.insert(client);
         // 4. save server config
