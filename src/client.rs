@@ -3,8 +3,6 @@ use crate::{gen, proxy};
 use bincode::Options;
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
-use fast_socks5::server::Socks5Socket;
-use futures::FutureExt;
 use log;
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
@@ -184,14 +182,7 @@ impl Client {
         log::info!("New incoming request, stream id {:?}", inbound.id());
         if &conf.target_addr.to_lowercase() == "socks5" {
             // target is socks5
-            let config = fast_socks5::server::Config::default();
-            let socket = Socks5Socket::new(inbound.compat(), Arc::new(config));
-            let transfer = socket.upgrade_to_socks5().map(|r| {
-                if let Err(e) = r {
-                    log::warn!("Transfer error occured. error={}", e);
-                }
-            });
-            transfer.await;
+            proxy::transfer_to_socks5_and_log_error(inbound.compat()).await;
         } else {
             // target is socket addr
             let expose_addr = &conf

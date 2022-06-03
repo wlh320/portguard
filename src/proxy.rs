@@ -1,5 +1,6 @@
+use fast_socks5::server::Socks5Socket;
 use futures::FutureExt;
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 
 pub(crate) async fn transfer<S1, S2>(inbound: S1, outbound: S2) -> Result<(), Box<dyn Error>>
@@ -30,6 +31,20 @@ where
     S2: AsyncRead + AsyncWrite + Unpin,
 {
     let transfer = crate::proxy::transfer(inbound, outbound).map(|r| {
+        if let Err(e) = r {
+            log::warn!("Transfer error occured. error={}", e);
+        }
+    });
+    transfer.await;
+}
+
+pub(crate) async fn transfer_to_socks5_and_log_error<S>(inbound: S)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let config = fast_socks5::server::Config::default();
+    let socket = Socks5Socket::new(inbound, Arc::new(config));
+    let transfer = socket.upgrade_to_socks5().map(|r| {
         if let Err(e) = r {
             log::warn!("Transfer error occured. error={}", e);
         }
