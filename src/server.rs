@@ -142,7 +142,7 @@ impl Server {
             config_path: path.to_owned(),
         }
     }
-
+    /// code for generation
     pub fn gen_client<P: AsRef<Path>>(
         &mut self,
         in_path: P,
@@ -183,7 +183,6 @@ impl Server {
         self.config.save(&self.config_path)?;
         Ok(())
     }
-
     pub fn gen_key(&mut self) -> Result<(), Box<dyn Error>> {
         // gen key
         let keypair = gen::gen_keypair()?;
@@ -194,6 +193,9 @@ impl Server {
         Ok(())
     }
 
+    /// server functions:
+    /// handle_xxx -> handle incoming events or connections
+    /// start_xxx  -> spawn proxy tasks
     pub async fn run_server_proxy(self) -> Result<(), Box<dyn Error>> {
         let this = Arc::new(self);
         let listen_addr: SocketAddr = format!("0.0.0.0:{}", this.config.port).parse().unwrap();
@@ -202,7 +204,7 @@ impl Server {
         // spawn to handle reverse proxy
         let (tx, rx) = mpsc::channel::<RproxyEvent>(RPROXY_CHAN_LEN);
         let rproxy_handle = tokio::spawn(async move {
-            if let Err(e) = Self::handle_reverse_proxy(rx).await {
+            if let Err(e) = Self::handle_rproxy_event(rx).await {
                 log::warn!("{}", e);
             }
         });
@@ -228,15 +230,7 @@ impl Server {
         inbound: TcpStream,
         tx: Sender<RproxyEvent>,
     ) -> Result<(), Box<dyn Error>> {
-        log::info!("New incoming peer_addr {:?}", inbound.peer_addr());
-        // create noise stream & client auth
-        let responder = snowstorm::Builder::new(PATTERN.parse()?)
-            .local_private_key(&self.config.prikey)
-            .build_responder()?;
-        let enc_inbound = NoiseStream::handshake_with_verifier(inbound, responder, |key| {
-            self.config.clients.contains(key)
-        })
-        .await?;
+        let enc_inbound = self.accept_noise_stream(inbound).await?;
         // at this point, client already passed verification
         // can use `.unwrap()` here because client must have a static key
         let token = enc_inbound.get_state().get_remote_static().unwrap();
@@ -256,7 +250,7 @@ impl Server {
         Ok(())
     }
     /// handle reverse proxy
-    async fn handle_reverse_proxy(mut rx: Receiver<RproxyEvent>) -> Result<(), Box<dyn Error>> {
+    async fn handle_rproxy_event(mut rx: Receiver<RproxyEvent>) -> Result<(), Box<dyn Error>> {
         // TODO: need improvement, how to share yamux::Control between async task?
         let mut conns: ConnMap = HashMap::new();
         while let Some(event) = rx.recv().await {
@@ -265,45 +259,13 @@ impl Server {
                     conns.insert(id, Mutex::new(ctrl));
                 }
                 RproxyEvent::Visitor(id, inbound) => {
-                    if !conns.contains_key(&id) {
-                        log::warn!("No such service (id: {})", id);
-                        continue;
-                    }
-                    let ctrl = conns.get(&id).unwrap();
-                    if let Ok(outbound) = ctrl.lock().await.open_stream().await {
-                        let peer_addr = inbound.get_inner().peer_addr();
-                        log::info!("Start proxying {peer_addr:?} to rproxy service (id: {id})");
-                        tokio::spawn(async move {
-                            proxy::transfer_and_log_error(inbound, outbound.compat()).await;
-                        });
-                    } else {
-                        log::warn!("Cannot connect service (id: {id})");
+                    if let Err(e) = Self::start_proxy_to_rproxy_conn(&conns, id, inbound).await {
+                        log::warn!("Error: {e}");
                     }
                 }
             }
         }
         Ok(())
-    }
-    /// following are helper functions:
-    /// start
-    async fn verify_file_hash(
-        &self,
-        mut enc_inbound: NoiseStream<TcpStream>,
-    ) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
-        // verify hash of client
-        let token = enc_inbound.get_state().get_remote_static().unwrap();
-        let mut buf: [u8; FILEHASH_LEN] = [0; FILEHASH_LEN];
-        let real_hash = &self.config.clients.get(token).unwrap().filehash;
-        enc_inbound.read_exact(&mut buf).await?;
-        if real_hash.as_ref().map_or(false, |f| f.hash == buf) {
-            log::debug!("filehash verify passed, received: {:?}", &buf);
-            enc_inbound.write_u8(66).await?;
-        } else {
-            log::debug!("filehash verify failed, received: {:?}", &buf);
-            enc_inbound.write_u8(0).await?;
-            Err("This client has an invalid hash")?
-        }
-        Ok(enc_inbound)
     }
     /// start to handle proxy
     async fn start_proxy_to_target(
@@ -324,6 +286,21 @@ impl Server {
         }
         Ok(())
     }
+    /// start to handle rproxy conn for visitor
+    async fn start_proxy_to_rproxy_conn(
+        conns: &ConnMap,
+        id: usize,
+        inbound: Box<NoiseStream<TcpStream>>,
+    ) -> Result<(), Box<dyn Error>> {
+        let peer_addr = inbound.get_inner().peer_addr();
+        log::info!("Start proxying {peer_addr:?} to rproxy service (id: {id})");
+        let ctrl = conns.get(&id).ok_or("No such service")?;
+        let outbound = ctrl.lock().await.open_stream().await?;
+        tokio::spawn(async move {
+            proxy::transfer_and_log_error(inbound, outbound.compat()).await;
+        });
+        Ok(())
+    }
     /// start a new rproxy connection
     async fn start_new_rproxy_conn(
         inbound: NoiseStream<TcpStream>,
@@ -333,7 +310,7 @@ impl Server {
     ) -> Result<(), Box<dyn Error>> {
         let peer_addr = inbound.get_inner().peer_addr()?;
         let target = target.to_string();
-        log::info!("Start reverse proxy to {peer_addr}:{target} as a service (id {id})",);
+        log::info!("Start reverse proxy ({peer_addr}:{target}) as service (id {id})");
         let yamux_config = yamux::Config::default();
         let yamux_conn =
             yamux::Connection::new(inbound.compat(), yamux_config, yamux::Mode::Client);
@@ -342,5 +319,38 @@ impl Server {
         tokio::task::spawn(yamux::into_stream(yamux_conn).for_each(|_| async {}));
         tx.send(RproxyEvent::Client(id, control)).await?;
         Ok(())
+    }
+
+    /// helper function
+    async fn accept_noise_stream(&self, inbound: TcpStream) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
+        log::info!("New incoming stream (peer_addr {:?})", inbound.peer_addr());
+        // create noise stream & client auth
+        let responder = snowstorm::Builder::new(PATTERN.parse()?)
+            .local_private_key(&self.config.prikey)
+            .build_responder()?;
+        let enc_inbound = NoiseStream::handshake_with_verifier(inbound, responder, |key| {
+            self.config.clients.contains(key)
+        })
+        .await?;
+        Ok(enc_inbound)
+    }
+    async fn verify_file_hash(
+        &self,
+        mut enc_inbound: NoiseStream<TcpStream>,
+    ) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
+        // verify hash of client
+        let token = enc_inbound.get_state().get_remote_static().unwrap();
+        let mut buf: [u8; FILEHASH_LEN] = [0; FILEHASH_LEN];
+        let real_hash = &self.config.clients.get(token).unwrap().filehash;
+        enc_inbound.read_exact(&mut buf).await?;
+        if real_hash.as_ref().map_or(false, |f| f.hash == buf) {
+            log::debug!("filehash verify passed, received: {:?}", &buf);
+            enc_inbound.write_u8(66).await?;
+        } else {
+            log::debug!("filehash verify failed, received: {:?}", &buf);
+            enc_inbound.write_u8(0).await?;
+            Err("This client has an invalid hash")?
+        }
+        Ok(enc_inbound)
     }
 }

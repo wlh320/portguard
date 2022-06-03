@@ -196,6 +196,7 @@ impl Client {
         }
         Ok(())
     }
+
     /// list current client public key
     pub fn list_pubkey(server: bool) -> Result<(), Box<dyn Error>> {
         let conf = ClientConfig::from_slice(&CLIENT_CONF_BUF)?;
@@ -224,7 +225,6 @@ impl Client {
             client_prikey: keypair.private,
             ..old_conf
         };
-        // 2. gen new client binary
         gen::gen_client_binary(in_path.as_ref(), out_path.as_ref(), mod_conf)?;
         Ok(())
     }
