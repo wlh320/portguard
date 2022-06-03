@@ -1,13 +1,14 @@
 /// functions for generating keypair and client binary
-use crate::client::ClientConfig;
-use crate::consts::{CONF_BUF_LEN, PATTERN};
+use std::error::Error;
+use std::fs::{self, OpenOptions};
+use std::path::Path;
 
 use memmap2::MmapOptions;
 use object::{BinaryFormat, File, Object, ObjectSection};
 use snowstorm::Keypair;
-use std::error::Error;
-use std::fs::{self, OpenOptions};
-use std::path::Path;
+
+use crate::client::ClientConfig;
+use crate::consts::{CONF_BUF_LEN, PATTERN};
 
 fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], Box<dyn Error>> {
     let v = conf.to_vec()?;

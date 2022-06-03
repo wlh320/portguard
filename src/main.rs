@@ -1,10 +1,11 @@
+use std::env;
+use std::error::Error;
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 use portguard::client::Client;
 use portguard::server::{Server, ServerConfig};
 use portguard::Remote;
-use std::env;
-use std::error::Error;
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[clap(author, version, about)]

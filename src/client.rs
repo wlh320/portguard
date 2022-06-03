@@ -1,19 +1,21 @@
-use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::{gen, proxy};
+use std::error::Error;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
 use bincode::Options;
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use log;
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
-use std::error::Error;
-use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+
+use crate::consts::{CONF_BUF_LEN, PATTERN};
+use crate::{gen, proxy};
 
 /// client's builtin config, will be serialized to bincode
 #[derive(Debug, Clone, Serialize, Deserialize)]

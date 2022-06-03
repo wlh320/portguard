@@ -1,8 +1,9 @@
-use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
     net::{AddrParseError, SocketAddr},
 };
+
+use serde::{Deserialize, Serialize};
 
 // untagged for unit variant of Enum
 // solution from <https://github.com/serde-rs/serde/issues/1560>
