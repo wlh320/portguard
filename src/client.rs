@@ -44,6 +44,7 @@ impl ClientConfig {
 }
 
 #[cfg_attr(target_os = "linux", link_section = ".portguard")]
+#[cfg_attr(target_os = "android", link_section = ".portguard")]
 #[cfg_attr(target_os = "windows", link_section = "pgmodify")]
 #[cfg_attr(target_os = "macos", link_section = "__DATA,__portguard")]
 #[used]
