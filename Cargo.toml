@@ -28,3 +28,8 @@ blake2 = "0.10.4"
 strip = true
 lto = true # for file size
 codegen-units = 1 # for file size
+
+[[example]]
+name = "pgcli"
+path = "examples/client-lib.rs"
+crate-type = ["cdylib"]

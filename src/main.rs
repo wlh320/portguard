@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use portguard::client::Client;
-use portguard::server::{Server, ServerConfig};
+use portguard::server::Server;
 use portguard::Remote;
 
 #[derive(Parser)]
@@ -93,9 +93,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             Client::run_client(port, server_addr).await?;
         }
         Commands::Server { config: path } => {
-            let content = std::fs::read_to_string(&path)?;
-            let config: ServerConfig = toml::de::from_str(&content)?;
-            let server = Server::new(config, &path);
+            let server = Server::build(path)?;
             server.run_server_proxy().await?;
         }
         Commands::GenCli {
@@ -107,22 +105,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
             service,
         } => {
             let in_path = in_path.unwrap_or(env::current_exe()?);
-            let content = std::fs::read_to_string(&path)?;
-            let config = toml::de::from_str(&content)?;
             let remote = Remote::try_parse(target.as_deref(), service)
                 .map_err(|e| {
                     log::warn!("Invalid remote input, use default. Error {}", e);
                 })
                 .ok();
-
-            let mut server = portguard::server::Server::new(config, &path);
+            let mut server = portguard::server::Server::build(path)?;
             server.gen_client(in_path, out_path, name, remote)?;
         }
         Commands::GenKey { config: path } => {
-            let content = std::fs::read_to_string(&path)?;
-            let config = toml::de::from_str(&content)?;
-
-            let mut server = portguard::server::Server::new(config, &path);
+            let mut server = portguard::server::Server::build(path)?;
             server.gen_key()?;
         }
         Commands::ListKey { server } => {

@@ -78,7 +78,7 @@ impl Borrow<[u8]> for ClientEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ServerConfig {
+struct ServerConfig {
     /// server public ip or domain
     #[serde(default = "default_host")]
     host: String,
@@ -136,11 +136,13 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: ServerConfig, path: &Path) -> Server {
-        Server {
+    pub fn build(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        let content = std::fs::read_to_string(&path)?;
+        let config: ServerConfig = toml::de::from_str(&content)?;
+        Ok(Server {
             config,
-            config_path: path.to_owned(),
-        }
+            config_path: path.as_ref().into(),
+        })
     }
     /// code for generation
     pub fn gen_client<P: AsRef<Path>>(
@@ -242,9 +244,9 @@ impl Server {
                 tx.send(RproxyEvent::Visitor(id, Box::new(enc_inbound)))
                     .await?
             }
-            Remote::RProxy(addr, id) => {
+            Remote::RProxy(target, id) => {
                 let enc_inbound = self.verify_file_hash(enc_inbound).await?;
-                Self::start_new_rproxy_conn(enc_inbound, id, addr, tx).await?;
+                Self::start_new_rproxy_conn(enc_inbound, id, target, tx).await?;
             }
         };
         Ok(())
@@ -322,7 +324,10 @@ impl Server {
     }
 
     /// helper function
-    async fn accept_noise_stream(&self, inbound: TcpStream) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
+    async fn accept_noise_stream(
+        &self,
+        inbound: TcpStream,
+    ) -> Result<NoiseStream<TcpStream>, snowstorm::SnowstormError> {
         log::info!("New incoming stream (peer_addr {:?})", inbound.peer_addr());
         // create noise stream & client auth
         let responder = snowstorm::Builder::new(PATTERN.parse()?)
