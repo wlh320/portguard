@@ -1,8 +1,8 @@
 mod consts;
 mod proxy;
 mod remote;
-mod gen;
 
 pub mod client;
 pub mod server;
+pub mod gen;
 pub use remote::Remote;

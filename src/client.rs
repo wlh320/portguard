@@ -1,9 +1,8 @@
 use std::error::Error;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
+use backoff::{future::retry, ExponentialBackoff};
 use bincode::Options;
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
@@ -15,7 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use crate::consts::{CONF_BUF_LEN, PATTERN};
-use crate::{gen, proxy};
+use crate::proxy;
 
 /// client's builtin config, will be serialized to bincode
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,14 +121,14 @@ impl Client {
         log::info!("Client exposing service on: {}", conf.target_addr);
         log::info!("Portguard server on: {}", conf.server_addr);
         // start reverse proxy
-        loop {
+        let try_conn = || async {
             let conf = conf.clone();
-            if let Err(e) = Self::make_reverse_proxy_conn(&conf).await {
+            Self::make_reverse_proxy_conn(&conf).await.map_err(|e| {
                 log::warn!("Failed to make reverse proxy connection. Error: {}", e);
-            }
-            // failed, wait and retry
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
+                backoff::Error::transient(e)
+            })
+        };
+        retry(ExponentialBackoff::default(), try_conn).await
     }
 
     async fn try_handshake(conf: &ClientConfig) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
@@ -140,9 +139,8 @@ impl Client {
         let conn = TcpStream::connect(&conf.server_addr).await?;
         let mut enc_conn = NoiseStream::handshake(conn, initiator).await?;
         // verify hash
-        // if verification failed, we hope to abort program, so unwrap() is ok
         let mut hasher = Blake2s256::new();
-        hasher.update(std::fs::read(std::env::current_exe().unwrap()).unwrap());
+        hasher.update(std::fs::read(std::env::current_exe()?)?);
         let res = hasher.finalize();
         enc_conn.write_all(&res).await?;
         let ret = enc_conn.read_u8().await?;
@@ -151,23 +149,16 @@ impl Client {
         }
         Ok(enc_conn)
     }
-
     async fn make_reverse_proxy_conn(conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
         // make connection with server
         log::info!("Trying to connect to server...");
-        let enc_conn = match Self::try_handshake(conf).await {
-            Ok(conn) => conn,
-            Err(e) => {
-                log::error!("Handshake failed. Error: {e}");
-                panic!("Handshake failed");
-            }
-        };
+        let enc_conn = Self::try_handshake(conf).await?;
         log::info!("Handshake succeeded.");
         // make yamux outbound stream and wait for incomming stream
         let yamux_config = yamux::Config::default();
         let mut yamux_conn =
             yamux::Connection::new(enc_conn.compat(), yamux_config, yamux::Mode::Server);
-        while let Ok(Some(inbound)) = yamux_conn.next_stream().await {
+        while let Some(inbound) = yamux_conn.next_stream().await? {
             let conf = conf.clone();
             tokio::spawn(async move {
                 if let Err(e) = Client::handle_reverse_client_connection(inbound, &conf).await {
@@ -214,19 +205,6 @@ impl Client {
             let key = base64::encode(conf.server_pubkey);
             println!("Server pubkey: {:?}", key);
         }
-        Ok(())
-    }
-    /// generate client binary with a new keypair
-    pub fn modify_client_keypair<P: AsRef<Path>>(
-        in_path: P,
-        out_path: P,
-    ) -> Result<(), Box<dyn Error>> {
-        let keypair = gen::gen_keypair()?;
-        let mod_conf = move |old_conf: ClientConfig| ClientConfig {
-            client_prikey: keypair.private,
-            ..old_conf
-        };
-        gen::gen_client_binary(in_path.as_ref(), out_path.as_ref(), mod_conf)?;
         Ok(())
     }
 }

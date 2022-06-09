@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use portguard::client::Client;
+use portguard::gen;
 use portguard::server::Server;
 use portguard::Remote;
 
@@ -82,6 +83,18 @@ enum Commands {
         #[clap(short, long)]
         output: PathBuf,
     },
+    /// Clone a client from existing ones (analogy to Dolly the sheep)
+    CloneCli {
+        /// location of input dna client binary (config provider)
+        #[clap(short, long)]
+        dna: PathBuf,
+        /// location of input egg client binary (program provider, current by default)
+        #[clap(short, long)]
+        egg: Option<PathBuf>,
+        /// location of output binary
+        #[clap(short, long)]
+        output: PathBuf,
+    },
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
@@ -110,11 +123,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     log::warn!("Invalid remote input, use default. Error {}", e);
                 })
                 .ok();
-            let mut server = portguard::server::Server::build(path)?;
+            let mut server = Server::build(path)?;
             server.gen_client(in_path, out_path, name, remote)?;
         }
         Commands::GenKey { config: path } => {
-            let mut server = portguard::server::Server::build(path)?;
+            let mut server = Server::build(path)?;
             server.gen_key()?;
         }
         Commands::ListKey { server } => {
@@ -125,7 +138,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
             output: out_path,
         } => {
             let in_path = in_path.unwrap_or(env::current_exe()?);
-            Client::modify_client_keypair(in_path, out_path)?;
+            gen::modify_client_keypair(in_path, out_path)?;
+        }
+        Commands::CloneCli { dna, egg, output } => {
+            let egg = egg.unwrap_or(env::current_exe()?);
+            gen::clone_client(dna, egg, output)?;
         }
     }
     Ok(())

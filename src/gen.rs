@@ -10,7 +10,7 @@ use snowstorm::Keypair;
 use crate::client::ClientConfig;
 use crate::consts::{CONF_BUF_LEN, PATTERN};
 
-fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], Box<dyn Error>> {
+fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], bincode::Error> {
     let v = conf.to_vec()?;
     let mut bytes: [u8; CONF_BUF_LEN] = [0; CONF_BUF_LEN];
     bytes[..v.len()].clone_from_slice(&v[..]);
@@ -40,6 +40,7 @@ pub fn gen_keypair() -> Result<Keypair, snowstorm::snow::Error> {
     Ok(key)
 }
 
+/// generate a new client binary using a callback function that modifies config
 pub fn gen_client_binary<F>(
     in_path: &Path,
     out_path: &Path,
@@ -73,5 +74,45 @@ where
     } else {
         fs::remove_file(&new_exe)?;
     }
+    Ok(())
+}
+
+/// copy existing client with a new keypair
+pub fn modify_client_keypair<P: AsRef<Path>>(
+    in_path: P,
+    out_path: P,
+) -> Result<(), Box<dyn Error>> {
+    let keypair = crate::gen::gen_keypair()?;
+    let mod_conf = move |old_conf: ClientConfig| ClientConfig {
+        client_prikey: keypair.private,
+        ..old_conf
+    };
+    crate::gen::gen_client_binary(in_path.as_ref(), out_path.as_ref(), mod_conf)?;
+    Ok(())
+}
+
+/// read config from a existing client
+fn read_client_conf<P: AsRef<Path>>(path: P) -> Result<ClientConfig, Box<dyn Error>> {
+    let file = OpenOptions::new().read(true).write(true).open(&path)?;
+    let buf = unsafe { MmapOptions::new().map(&file) }?;
+    let file = File::parse(&*buf)?;
+    if let Some(range) = get_client_config_section(&file) {
+        assert_eq!(range.1, CONF_BUF_LEN as u64);
+        let base = range.0 as usize;
+        let conf = ClientConfig::from_slice(&buf[base..(base + CONF_BUF_LEN)])?;
+        Ok(conf)
+    } else {
+        Err("config not found")?
+    }
+}
+
+/// clone a client from existing one (analogy to Dolly the sheep)
+pub fn clone_client<P: AsRef<Path>>(
+    dna_path: P,
+    egg_path: P,
+    out_path: P,
+) -> Result<(), Box<dyn Error>> {
+    let dna = crate::gen::read_client_conf(&dna_path)?;
+    crate::gen::gen_client_binary(egg_path.as_ref(), out_path.as_ref(), |_| dna)?;
     Ok(())
 }

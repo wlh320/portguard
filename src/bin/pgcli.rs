@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use portguard::client::Client;
 
 #[tokio::main]
@@ -9,7 +11,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = std::env::args()
         .find_map(|s| s.parse::<u16>().ok()) // first valid argument
         .unwrap_or(8022); // default
-    Client::run_client(port, None).await.map_err(|e| {
+    let server = std::env::args().find_map(|s| s.parse::<SocketAddr>().ok());
+    Client::run_client(port, server).await.map_err(|e| {
         log::error!("Error occured: {}", e);
         e
     })

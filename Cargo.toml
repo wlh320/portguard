@@ -23,6 +23,7 @@ curve25519-dalek = "4.0.0-pre.2" # for deriving pubkey from prikey
 yamux = "0.10.1" # for impl reverse proxy
 tokio-util = { version = "0.7.2", features = ["compat"] }
 blake2 = "0.10.4"
+backoff = { version = "0.4", features = ["tokio"] }
 
 [profile.release]
 strip = true
