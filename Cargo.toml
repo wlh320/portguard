@@ -11,7 +11,7 @@ env_logger = "0.8.4"
 memmap2 = "0.5.3"
 object = "0.28.3"
 clap = { version = "3.1.8", features = ["derive", "env"] }
-tokio = { version = "1", features = ["rt-multi-thread", "io-util", "macros", "net", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-util", "macros", "net", "sync"] }
 futures = "0.3"
 snowstorm = { path = "snowstorm", version = "0.3.1" }
 fast-socks5 = "0.8.0"
@@ -24,6 +24,7 @@ yamux = "0.10.1" # for impl reverse proxy
 tokio-util = { version = "0.7.2", features = ["compat"] }
 blake2 = "0.10.4"
 backoff = { version = "0.4", features = ["tokio"] }
+dashmap = "5.3.4"
 
 [profile.release]
 strip = true

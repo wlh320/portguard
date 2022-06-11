@@ -1,10 +1,10 @@
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
 use fast_socks5::server::Socks5Socket;
 use futures::FutureExt;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 
-pub(crate) async fn transfer<S1, S2>(inbound: S1, outbound: S2) -> Result<(), Box<dyn Error>>
+pub(crate) async fn transfer<S1, S2>(inbound: S1, outbound: S2) -> Result<(), io::Error>
 where
     S1: AsyncRead + AsyncWrite + Unpin,
     S2: AsyncRead + AsyncWrite + Unpin,

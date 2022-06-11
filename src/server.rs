@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
@@ -7,23 +7,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use blake2::{Blake2s256, Digest};
-use futures::lock::Mutex;
-use futures::StreamExt;
+use dashmap::DashMap;
 use log;
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use crate::client::ClientConfig;
-use crate::consts::{FILEHASH_LEN, PATTERN, RPROXY_CHAN_LEN};
+use crate::consts::{FILEHASH_LEN, PATTERN};
 use crate::gen;
 use crate::proxy;
 use crate::remote::{Remote, Target};
 
-type ConnMap = HashMap<usize, Mutex<yamux::Control>>;
+// type ConnMap = HashMap<usize, Mutex<yamux::Control>>;
 
 /// copy from https://users.rust-lang.org/t/serialize-a-vec-u8-to-json-as-base64/57781/2
 mod base64_serde {
@@ -119,20 +117,11 @@ impl ServerConfig {
     }
 }
 
-#[derive(Debug)]
-enum RproxyEvent {
-    /// one who creates reverse proxy
-    Client(usize, yamux::Control),
-    /// one who visits reverse proxy
-    Visitor(usize, Box<NoiseStream<TcpStream>>),
-    // cancel a reverse proxy
-    // Cancel(usize),
-}
-
 /// Portguard server
 pub struct Server {
     config_path: PathBuf,
     config: ServerConfig,
+    conns: DashMap<usize, yamux::Control>,
 }
 
 impl Server {
@@ -142,6 +131,7 @@ impl Server {
         Ok(Server {
             config,
             config_path: path.as_ref().into(),
+            conns: DashMap::new(),
         })
     }
     /// code for generation
@@ -196,42 +186,30 @@ impl Server {
     }
 
     /// server functions:
-    /// handle_xxx -> handle incoming events or connections
+    /// handle_xxx -> handle incoming connections
     /// start_xxx  -> spawn proxy tasks
     pub async fn run_server_proxy(self) -> Result<(), Box<dyn Error>> {
-        let this = Arc::new(self);
-        let listen_addr: SocketAddr = format!("0.0.0.0:{}", this.config.port).parse().unwrap();
+        let this1 = Arc::new(self);
+        let this2 = Arc::clone(&this1);
+        let listen_addr: SocketAddr = format!("0.0.0.0:{}", this1.config.port).parse().unwrap();
         log::info!("Listening on port: {:?}", listen_addr);
 
-        // spawn to handle reverse proxy
-        let (tx, rx) = mpsc::channel::<RproxyEvent>(RPROXY_CHAN_LEN);
-        let rproxy_handle = tokio::spawn(async move {
-            if let Err(e) = Self::handle_rproxy_event(rx).await {
-                log::warn!("{}", e);
-            }
-        });
-        // TODO: spawn to handle config file hot-reloading
+        // TODO: spawn to handle config hot-reloading
 
         // spwan to handle inbound connection
         let listener = TcpListener::bind(listen_addr).await?;
         while let Ok((inbound, _)) = listener.accept().await {
-            let this = Arc::clone(&this);
-            let tx = tx.clone();
+            let this = Arc::clone(&this2);
             tokio::spawn(async move {
-                if let Err(e) = this.handle_connection(inbound, tx).await {
+                if let Err(e) = this.handle_connection(inbound).await {
                     log::warn!("{}", e);
                 }
             });
         }
-        rproxy_handle.await?;
         Ok(())
     }
     /// handle inbound connection
-    async fn handle_connection(
-        &self,
-        inbound: TcpStream,
-        tx: Sender<RproxyEvent>,
-    ) -> Result<(), Box<dyn Error>> {
+    async fn handle_connection(&self, inbound: TcpStream) -> Result<(), Box<dyn Error>> {
         let enc_inbound = self.accept_noise_stream(inbound).await?;
         // at this point, client already passed verification
         // can use `.unwrap()` here because client must have a static key
@@ -240,40 +218,19 @@ impl Server {
         let remote = client_remote.unwrap_or(self.config.remote);
         match remote {
             Remote::Proxy(target) => Self::start_proxy_to_target(enc_inbound, target).await?,
-            Remote::Service(id) => {
-                tx.send(RproxyEvent::Visitor(id, Box::new(enc_inbound)))
-                    .await?
-            }
+            Remote::Service(id) => self.start_proxy_to_rproxy_conn(id, enc_inbound).await?,
             Remote::RProxy(target, id) => {
-                let enc_inbound = self.verify_file_hash(enc_inbound).await?;
-                Self::start_new_rproxy_conn(enc_inbound, id, target, tx).await?;
+                let enc_inbound = self.try_handshake(id, enc_inbound).await?;
+                self.start_new_rproxy_conn(enc_inbound, id, target).await?;
             }
         };
-        Ok(())
-    }
-    /// handle reverse proxy
-    async fn handle_rproxy_event(mut rx: Receiver<RproxyEvent>) -> Result<(), Box<dyn Error>> {
-        // TODO: need improvement, how to share yamux::Control between async task?
-        let mut conns: ConnMap = HashMap::new();
-        while let Some(event) = rx.recv().await {
-            match event {
-                RproxyEvent::Client(id, ctrl) => {
-                    conns.insert(id, Mutex::new(ctrl));
-                }
-                RproxyEvent::Visitor(id, inbound) => {
-                    if let Err(e) = Self::start_proxy_to_rproxy_conn(&conns, id, inbound).await {
-                        log::warn!("Error: {e}");
-                    }
-                }
-            }
-        }
         Ok(())
     }
     /// start to handle proxy
     async fn start_proxy_to_target(
         inbound: NoiseStream<TcpStream>,
         target: Target,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), io::Error> {
         let peer_addr = inbound.get_inner().peer_addr()?;
         match target {
             Target::Addr(addr) => {
@@ -290,14 +247,14 @@ impl Server {
     }
     /// start to handle rproxy conn for visitor
     async fn start_proxy_to_rproxy_conn(
-        conns: &ConnMap,
+        &self,
         id: usize,
-        inbound: Box<NoiseStream<TcpStream>>,
+        inbound: NoiseStream<TcpStream>,
     ) -> Result<(), Box<dyn Error>> {
         let peer_addr = inbound.get_inner().peer_addr();
         log::info!("Start proxying {peer_addr:?} to rproxy service (id: {id})");
-        let ctrl = conns.get(&id).ok_or("No such service")?;
-        let outbound = ctrl.lock().await.open_stream().await?;
+        let mut ctrl = self.conns.get_mut(&id).ok_or("Service offline")?;
+        let outbound = ctrl.open_stream().await?;
         tokio::spawn(async move {
             proxy::transfer_and_log_error(inbound, outbound.compat()).await;
         });
@@ -305,21 +262,29 @@ impl Server {
     }
     /// start a new rproxy connection
     async fn start_new_rproxy_conn(
+        &self,
         inbound: NoiseStream<TcpStream>,
         id: usize,
         target: Target,
-        tx: Sender<RproxyEvent>,
     ) -> Result<(), Box<dyn Error>> {
+        // 1. make conneciton
         let peer_addr = inbound.get_inner().peer_addr()?;
         let target = target.to_string();
         log::info!("Start reverse proxy ({peer_addr}:{target}) as service (id {id})");
         let yamux_config = yamux::Config::default();
-        let yamux_conn =
+        let mut yamux_conn =
             yamux::Connection::new(inbound.compat(), yamux_config, yamux::Mode::Client);
         let control = yamux_conn.control();
-        // TODO: dont know why yamux client needs to do this.
-        tokio::task::spawn(yamux::into_stream(yamux_conn).for_each(|_| async {}));
-        tx.send(RproxyEvent::Client(id, control)).await?;
+        // 2. update connection map
+        self.conns.insert(id, control);
+        tokio::spawn(async move {
+            while let Ok(Some(_)) = yamux_conn.next_stream().await {}
+            yamux_conn.control().close().await
+        })
+        .await
+        .ok();
+        self.conns.remove(&id);
+        log::info!("Service {id} disconnect.");
         Ok(())
     }
 
@@ -339,10 +304,15 @@ impl Server {
         .await?;
         Ok(enc_inbound)
     }
-    async fn verify_file_hash(
+    async fn try_handshake(
         &self,
+        id: usize,
         mut enc_inbound: NoiseStream<TcpStream>,
     ) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
+        if self.conns.contains_key(&id) {
+            enc_inbound.write_u8(88).await?;
+            Err("Service already online")?
+        }
         // verify hash of client
         let token = enc_inbound.get_state().get_remote_static().unwrap();
         let mut buf: [u8; FILEHASH_LEN] = [0; FILEHASH_LEN];

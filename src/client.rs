@@ -9,7 +9,7 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use log;
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
@@ -91,7 +91,6 @@ impl Client {
         }
         Ok(())
     }
-
     async fn handle_client_connection(
         inbound: TcpStream,
         conf: &ClientConfig,
@@ -130,7 +129,6 @@ impl Client {
         };
         retry(ExponentialBackoff::default(), try_conn).await
     }
-
     async fn try_handshake(conf: &ClientConfig) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
@@ -144,10 +142,11 @@ impl Client {
         let res = hasher.finalize();
         enc_conn.write_all(&res).await?;
         let ret = enc_conn.read_u8().await?;
-        if ret != 66 {
-            Err("Client hash is denied by server")?
+        match ret {
+            66 => Ok(enc_conn),
+            88 => panic!("Service is already online!"),
+            _ => Err("Client hash is denied by server")?
         }
-        Ok(enc_conn)
     }
     async fn make_reverse_proxy_conn(conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
         // make connection with server
@@ -166,13 +165,14 @@ impl Client {
                 }
             });
         }
-        Ok(())
+        log::info!("Connection closed.");
+        Err("Connection lost")?
     }
     /// handle yamux connection requests
     async fn handle_reverse_client_connection(
         inbound: yamux::Stream,
         conf: &ClientConfig,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), io::Error> {
         log::info!("New incoming request, stream id {:?}", inbound.id());
         if &conf.target_addr.to_lowercase() == "socks5" {
             // target is socks5

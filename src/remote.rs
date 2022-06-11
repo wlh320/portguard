@@ -94,7 +94,7 @@ impl Remote {
         Remote::Service(id)
     }
     /// if input both target and id, client is reverse proxy client
-    fn from_target_and_id(target: &str, id: usize) -> Result<Remote, Box<dyn Error>> {
+    fn from_target_and_id(target: &str, id: usize) -> Result<Remote, AddrParseError> {
         if target.to_lowercase() == "socks5" {
             Ok(Remote::RProxy(Target::Socks5, id))
         } else {
@@ -107,7 +107,7 @@ impl Remote {
         match target {
             None => match id {
                 Some(id) => Ok(Remote::from_id(id)),
-                None => Err("No target address")?,
+                None => Err("Invalid remote address")?,
             },
             Some(target) => Ok(match id {
                 None => Remote::from_target(target)?,
