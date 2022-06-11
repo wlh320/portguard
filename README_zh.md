@@ -141,12 +141,15 @@
 
 ## TODO
 
-- [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature.
-- [x] Set remote address per client.
-- [ ] Benchmark and improve performance.
-- [ ] When will a connection be closed?  Put it in logs.
-- [ ] Test.
+- [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature
+- [x] Set remote address per client
+- [ ] 跑分
+	- [x] [本机回环地址的 iperf 性能测试](./docs/localhost-iperf-benchmark.md)
+- [ ] 提升性能
+- [ ] 日志中记录流的关闭
+- [ ] 写测试
 - [ ] UDP?
+- [ ] 服务端动态读取配置文件
 
 ## 更新日志
 
@@ -191,4 +194,4 @@
 - [snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream from this project for convenience
 and add some code for timeout when reading from handshake message.
 - [fast-socks5](https://github.com/dizda/fast-socks5), I use Socks5Socket from this library as a built-in SOCKS5 server.
-- [rust-yamux](https://github.com/libp2p/rust-yamux), I use yamux from this library to impl reverse proxy.
+- [rust-yamux](https://github.com/libp2p/rust-yamux), I use yamux from this library for TCP stream multiplexing in reverse proxy.

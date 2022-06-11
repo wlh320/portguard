@@ -6,7 +6,7 @@ A port forwarding tool with encryption and authentication that just works like s
 
 Welcome to create issues and pull requests.
 
-[中文介绍](https://github.com/wlh320/portguard/blob/master/README_zh.md)
+[中文介绍](README_zh.md)
 
 ## Use case
 
@@ -139,12 +139,15 @@ Suggestions:
 
 ## TODO
 
-- [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature.
-- [x] Set remote address per client.
-- [ ] Benchmark and improve performance.
-- [ ] When will a connection be closed? Put it in logs.
-- [ ] Test.
+- [x] ~~I'm not familar with Noise protocol, now in my code every connection between client and server needs to handshake (except reverse proxy mode).~~ Now I think it is a feature
+- [x] Set remote address per client
+- [ ] Benchmark
+	- [x] [localhost-iperf-benchmark](docs/localhost-iperf-benchmark.md)
+- [ ] Improve performance
+- [ ] When will a connection be closed? Put it in logs
+- [ ] Test
 - [ ] UDP ?
+- [ ] server config hot reloading
 
 ## Changelog
 
@@ -152,6 +155,7 @@ Suggestions:
 - add `aarch64-linux-android` support (both binary and JNI lib, tested on my own phone).
 - add a new subcommand `clone-cli` to clone existing clients to other platform with built-in config unchanged.
 - better error handling for `ssh -R` server.
+- [localhost-iperf-benchmark](docs/localhost-iperf-benchmark.md)
 
 ### v0.3.1
 - before starting proxying, server will check filehash of reverse proxy client.
