@@ -2,7 +2,7 @@
 
 A port forwarding tool with encryption and authentication that just works like ssh tunnel, but **Zero Config** for client.
 
-It is currently a simple project and the author is not familiar with security, we take no responsibility for any security flaws.
+**Warning** It is currently a simple project and the author is not familiar with security, we take no responsibility for any security flaws.
 
 Welcome to create issues and pull requests.
 
@@ -148,6 +148,11 @@ Suggestions:
 
 ## Changelog
 
+### v0.3.2
+- add `aarch64-linux-android` support (both binary and JNI lib, tested on my own phone).
+- add a new subcommand `clone-cli` to clone existing clients to other platform with built-in config unchanged.
+- better error handling for `ssh -R` server.
+
 ### v0.3.1
 - before starting proxying, server will check filehash of reverse proxy client.
 - add a minimal client-only binary named `pgcli` for reducing file size in client side.
@@ -181,7 +186,6 @@ Suggestions:
 Thanks for these projects:
 
 - [dend.ro's blog article about self-modify binary](https://blog.dend.ro/self-modifying-rust/), I learned how to modify binary.
-- [snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream from this project for convenience
-and add some code for timeout when reading from handshake message.
+- [snowstorm](https://github.com/black-binary/snowstorm), I use NoiseStream from this project for convenience and add some code for timeout when reading from handshake message.
 - [fast-socks5](https://github.com/dizda/fast-socks5), I use Socks5Socket from this library as a built-in SOCKS5 server.
-- [rust-yamux](https://github.com/libp2p/rust-yamux), I use yamux from this library to impl reverse proxy.
+- [rust-yamux](https://github.com/libp2p/rust-yamux), I use yamux from this library for TCP stream multiplexing in reverse proxy.
