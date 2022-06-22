@@ -1,10 +1,12 @@
-use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use backoff::{future::retry, ExponentialBackoff};
 use bincode::Options;
 use blake2::{Blake2s256, Digest};
+use chacha20poly1305::aead::{Aead, NewAead};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce}; // Or `XChaCha20Poly1305`
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
 use log;
 use serde::{Deserialize, Serialize};
@@ -13,7 +15,7 @@ use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
-use crate::consts::{CONF_BUF_LEN, PATTERN};
+use crate::consts::{CONF_BUF_LEN, KEYPASS_LEN, PATTERN};
 use crate::proxy;
 
 /// client's builtin config, will be serialized to bincode
@@ -24,6 +26,7 @@ pub struct ClientConfig {
     pub reverse: bool,
     pub server_pubkey: Vec<u8>,
     pub client_prikey: Vec<u8>,
+    pub has_keypass: bool, // client prikey passphrase
 }
 
 impl ClientConfig {
@@ -53,13 +56,14 @@ pub struct Client;
 
 impl Client {
     /// entrance of client program
-    pub async fn run_client(
-        port: u16,
-        server_addr: Option<SocketAddr>,
-    ) -> Result<(), Box<dyn Error>> {
+    pub async fn run_client(port: u16, server_addr: Option<SocketAddr>) -> Result<()> {
         let mut conf = ClientConfig::from_slice(&CLIENT_CONF_BUF)?;
         if let Some(addr) = server_addr {
             conf.server_addr = addr;
+        }
+        // verfify client key passphrase
+        if conf.has_keypass {
+            conf.client_prikey = Self::decrypt_client_prikey(conf.client_prikey)?;
         }
         let conf = Arc::new(conf);
         match conf.reverse {
@@ -72,7 +76,7 @@ impl Client {
     /// in config: remote = "127.0.0.1:xxxx"
     ///     or     remote = "socks5"
     ///     or     remote = 66
-    async fn run_client_proxy(port: u16, conf: Arc<ClientConfig>) -> Result<(), Box<dyn Error>> {
+    async fn run_client_proxy(port: u16, conf: Arc<ClientConfig>) -> Result<()> {
         // read client config, overwrite server address
         // log information
         let listen_addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
@@ -91,10 +95,7 @@ impl Client {
         }
         Ok(())
     }
-    async fn handle_client_connection(
-        inbound: TcpStream,
-        conf: &ClientConfig,
-    ) -> Result<(), Box<dyn Error>> {
+    async fn handle_client_connection(inbound: TcpStream, conf: &ClientConfig) -> Result<()> {
         log::info!("New incoming peer_addr {:?}", inbound.peer_addr());
         // make noise stream
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
@@ -110,7 +111,7 @@ impl Client {
 
     /// client type: rclient (rproxy client)
     /// in config: remote = ["127.0.0.1:xxxx", 66]
-    async fn run_client_reverse_proxy(conf: Arc<ClientConfig>) -> Result<(), Box<dyn Error>> {
+    async fn run_client_reverse_proxy(conf: Arc<ClientConfig>) -> Result<()> {
         // must be valid address: socket addr or "socks5"
         assert!(
             conf.target_addr.to_lowercase() == "socks5"
@@ -129,7 +130,7 @@ impl Client {
         };
         retry(ExponentialBackoff::default(), try_conn).await
     }
-    async fn try_handshake(conf: &ClientConfig) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
+    async fn try_handshake(conf: &ClientConfig) -> Result<NoiseStream<TcpStream>> {
         let initiator = snowstorm::Builder::new(PATTERN.parse()?)
             .remote_public_key(&conf.server_pubkey)
             .local_private_key(&conf.client_prikey)
@@ -145,10 +146,10 @@ impl Client {
         match ret {
             66 => Ok(enc_conn),
             88 => panic!("Service is already online!"),
-            _ => Err("Client hash is denied by server")?
+            _ => Err(anyhow!("Client hash is denied by server"))?,
         }
     }
-    async fn make_reverse_proxy_conn(conf: &ClientConfig) -> Result<(), Box<dyn Error>> {
+    async fn make_reverse_proxy_conn(conf: &ClientConfig) -> Result<()> {
         // make connection with server
         log::info!("Trying to connect to server...");
         let enc_conn = Self::try_handshake(conf).await?;
@@ -166,7 +167,7 @@ impl Client {
             });
         }
         log::info!("Connection closed.");
-        Err("Connection lost")?
+        Err(anyhow!("Connection lost"))
     }
     /// handle yamux connection requests
     async fn handle_reverse_client_connection(
@@ -188,15 +189,24 @@ impl Client {
         }
         Ok(())
     }
+    /// verify key password
+    fn decrypt_client_prikey(key: Vec<u8>) -> Result<Vec<u8>> {
+        let mut password = rpassword::prompt_password("Input Key Passphrase: ")?.into_bytes();
+        password.resize(KEYPASS_LEN, 0);
+        let keypass = Key::from_slice(&password);
+        let cipher = ChaCha20Poly1305::new(keypass);
+        let key = cipher.decrypt(&Nonce::default(), &key[..])?;
+        Ok(key)
+    }
 
     /// list current client public key
-    pub fn list_pubkey(server: bool) -> Result<(), Box<dyn Error>> {
+    pub fn list_pubkey(server: bool) -> Result<()> {
         let conf = ClientConfig::from_slice(&CLIENT_CONF_BUF)?;
         // derive pubkey
         let privkey = Scalar::from_bits(
             conf.client_prikey
                 .try_into()
-                .map_err(|_| "Got invalid privkey when deriving pubkey")?,
+                .map_err(|_| anyhow!("Got invalid privkey when deriving pubkey"))?,
         );
         let point = (&ED25519_BASEPOINT_TABLE * &privkey).to_montgomery();
         let pubkey = base64::encode(point.to_bytes());

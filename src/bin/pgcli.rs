@@ -1,9 +1,10 @@
 use std::net::SocketAddr;
+use anyhow::Result;
 
 use portguard::client::Client;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info")
     }

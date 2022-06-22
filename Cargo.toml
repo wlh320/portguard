@@ -25,11 +25,15 @@ tokio-util = { version = "0.7.2", features = ["compat"] }
 blake2 = "0.10.4"
 backoff = { version = "0.4", features = ["tokio"] }
 dashmap = "5.3.4"
+chacha20poly1305 = { version = "0", features = ["std"] }
+rpassword = "6.0"
+anyhow = "1"
 
 [profile.release]
+panic = "abort"
 strip = true
-lto = true # for file size
-codegen-units = 1 # for file size
+lto = true
+codegen-units = 1
 
 [[example]]
 name = "pgcli"

@@ -1,11 +1,11 @@
 use std::borrow::Borrow;
 use std::collections::HashSet;
-use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use blake2::{Blake2s256, Digest};
 use dashmap::DashMap;
 use log;
@@ -110,7 +110,7 @@ fn default_remote() -> Remote {
 }
 
 impl ServerConfig {
-    fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
+    fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content = toml::ser::to_string(self)?;
         std::fs::write(path, content)?;
         Ok(())
@@ -125,7 +125,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn build(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn build(path: impl AsRef<Path>) -> Result<Self> {
         let content = std::fs::read_to_string(&path)?;
         let config: ServerConfig = toml::de::from_str(&content)?;
         Ok(Server {
@@ -141,9 +141,10 @@ impl Server {
         out_path: P,
         username: String,
         oremote: Option<Remote>,
-    ) -> Result<(), Box<dyn Error>> {
+        has_keypass: bool,
+    ) -> Result<()> {
         // 1. set client config
-        let keypair = gen::gen_keypair()?;
+        let keypair = gen::gen_keypair(has_keypass)?;
         let remote = oremote.unwrap_or(self.config.remote);
         let reverse = matches!(remote, Remote::RProxy(_, _));
         let cli_conf: ClientConfig = ClientConfig {
@@ -152,6 +153,7 @@ impl Server {
             reverse,
             server_pubkey: self.config.pubkey.clone(),
             client_prikey: keypair.private,
+            has_keypass,
         };
         // 2. gen client binary
         gen::gen_client_binary(in_path.as_ref(), out_path.as_ref(), |_| cli_conf)?;
@@ -175,9 +177,9 @@ impl Server {
         self.config.save(&self.config_path)?;
         Ok(())
     }
-    pub fn gen_key(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn gen_key(&mut self) -> Result<()> {
         // gen key
-        let keypair = gen::gen_keypair()?;
+        let keypair = gen::gen_keypair(false)?;
         self.config.pubkey = keypair.public;
         self.config.prikey = keypair.private;
         // save
@@ -188,7 +190,7 @@ impl Server {
     /// server functions:
     /// handle_xxx -> handle incoming connections
     /// start_xxx  -> spawn proxy tasks
-    pub async fn run_server_proxy(self) -> Result<(), Box<dyn Error>> {
+    pub async fn run_server_proxy(self) -> Result<()> {
         let this1 = Arc::new(self);
         let this2 = Arc::clone(&this1);
         let listen_addr: SocketAddr = format!("0.0.0.0:{}", this1.config.port).parse().unwrap();
@@ -209,7 +211,7 @@ impl Server {
         Ok(())
     }
     /// handle inbound connection
-    async fn handle_connection(&self, inbound: TcpStream) -> Result<(), Box<dyn Error>> {
+    async fn handle_connection(&self, inbound: TcpStream) -> Result<()> {
         let enc_inbound = self.accept_noise_stream(inbound).await?;
         // at this point, client already passed verification
         // can use `.unwrap()` here because client must have a static key
@@ -250,10 +252,13 @@ impl Server {
         &self,
         id: usize,
         inbound: NoiseStream<TcpStream>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<()> {
         let peer_addr = inbound.get_inner().peer_addr();
         log::info!("Start proxying {peer_addr:?} to rproxy service (id: {id})");
-        let mut ctrl = self.conns.get_mut(&id).ok_or("Service offline")?;
+        let mut ctrl = self
+            .conns
+            .get_mut(&id)
+            .ok_or_else(|| anyhow!("Service offline"))?;
         let outbound = ctrl.open_stream().await?;
         tokio::spawn(async move {
             proxy::transfer_and_log_error(inbound, outbound.compat()).await;
@@ -266,7 +271,7 @@ impl Server {
         inbound: NoiseStream<TcpStream>,
         id: usize,
         target: Target,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<()> {
         // 1. make conneciton
         let peer_addr = inbound.get_inner().peer_addr()?;
         let target = target.to_string();
@@ -308,10 +313,10 @@ impl Server {
         &self,
         id: usize,
         mut enc_inbound: NoiseStream<TcpStream>,
-    ) -> Result<NoiseStream<TcpStream>, Box<dyn Error>> {
+    ) -> Result<NoiseStream<TcpStream>> {
         if self.conns.contains_key(&id) {
             enc_inbound.write_u8(88).await?;
-            Err("Service already online")?
+            Err(anyhow!("Service already online"))?
         }
         // verify hash of client
         let token = enc_inbound.get_state().get_remote_static().unwrap();
@@ -324,7 +329,7 @@ impl Server {
         } else {
             log::debug!("filehash verify failed, received: {:?}", &buf);
             enc_inbound.write_u8(0).await?;
-            Err("This client has an invalid hash")?
+            Err(anyhow!("This client has an invalid hash"))?
         }
         Ok(enc_inbound)
     }

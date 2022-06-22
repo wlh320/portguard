@@ -1,5 +1,5 @@
 use std::env;
-use std::error::Error;
+use anyhow::Result;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
@@ -61,6 +61,9 @@ enum Commands {
         /// service id of a reverse proxy
         #[clap(short, long)]
         service: Option<usize>,
+        /// if key passphrase is needed to protect client key
+        #[clap(short, long)]
+        password: bool,
     },
     /// Generate keypairs
     GenKey {
@@ -82,6 +85,9 @@ enum Commands {
         /// location of output binary
         #[clap(short, long)]
         output: PathBuf,
+        /// if key passphrase is needed to protect client key
+        #[clap(short, long)]
+        password: bool,
     },
     /// Clone a client from existing ones (analogy to Dolly the sheep)
     CloneCli {
@@ -97,7 +103,7 @@ enum Commands {
     },
 }
 
-async fn run() -> Result<(), Box<dyn Error>> {
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let client_cmd = cli.command.unwrap_or(Commands::Client(cli.client));
     match client_cmd {
@@ -116,6 +122,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             name,
             target,
             service,
+            password: has_password,
         } => {
             let in_path = in_path.unwrap_or(env::current_exe()?);
             let remote = Remote::try_parse(target.as_deref(), service)
@@ -124,7 +131,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 })
                 .ok();
             let mut server = Server::build(path)?;
-            server.gen_client(in_path, out_path, name, remote)?;
+            server.gen_client(in_path, out_path, name, remote, has_password)?;
         }
         Commands::GenKey { config: path } => {
             let mut server = Server::build(path)?;
@@ -136,9 +143,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
         Commands::ModCli {
             input: in_path,
             output: out_path,
+            password: has_keypass,
         } => {
             let in_path = in_path.unwrap_or(env::current_exe()?);
-            gen::modify_client_keypair(in_path, out_path)?;
+            gen::modify_client_keypair(in_path, out_path, has_keypass)?;
         }
         Commands::CloneCli { dna, egg, output } => {
             let egg = egg.unwrap_or(env::current_exe()?);
@@ -149,7 +157,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info")
     }

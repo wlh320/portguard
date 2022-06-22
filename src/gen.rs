@@ -1,14 +1,16 @@
 /// functions for generating keypair and client binary
-use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::path::Path;
 
+use anyhow::{anyhow, Result};
+use chacha20poly1305::aead::{Aead, NewAead};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce}; // Or `XChaCha20Poly1305`
 use memmap2::MmapOptions;
 use object::{BinaryFormat, File, Object, ObjectSection};
 use snowstorm::Keypair;
 
 use crate::client::ClientConfig;
-use crate::consts::{CONF_BUF_LEN, PATTERN};
+use crate::consts::{CONF_BUF_LEN, KEYPASS_LEN, PATTERN};
 
 fn serialize_conf_to_buf(conf: &ClientConfig) -> Result<[u8; CONF_BUF_LEN], bincode::Error> {
     let v = conf.to_vec()?;
@@ -35,17 +37,21 @@ fn get_client_config_section(file: &File) -> Option<(u64, u64)> {
     None
 }
 
-pub fn gen_keypair() -> Result<Keypair, snowstorm::snow::Error> {
-    let key = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
-    Ok(key)
+pub fn gen_keypair(has_keypass: bool) -> Result<Keypair> {
+    let mut keypair = snowstorm::Builder::new(PATTERN.parse()?).generate_keypair()?;
+    if has_keypass {
+        let mut password = rpassword::prompt_password("Input Key Passphrase: ")?.into_bytes();
+        password.resize(KEYPASS_LEN, 0);
+        let keypass = Key::from_slice(&password);
+        let cipher = ChaCha20Poly1305::new(keypass);
+        let enc_prikey = cipher.encrypt(&Nonce::default(), &keypair.private[..])?;
+        keypair.private = enc_prikey;
+    }
+    Ok(keypair)
 }
 
 /// generate a new client binary using a callback function that modifies config
-pub fn gen_client_binary<F>(
-    in_path: &Path,
-    out_path: &Path,
-    mod_conf: F,
-) -> Result<(), Box<dyn Error>>
+pub fn gen_client_binary<F>(in_path: &Path, out_path: &Path, mod_conf: F) -> Result<()>
 where
     F: FnOnce(ClientConfig) -> ClientConfig,
 {
@@ -81,10 +87,12 @@ where
 pub fn modify_client_keypair<P: AsRef<Path>>(
     in_path: P,
     out_path: P,
-) -> Result<(), Box<dyn Error>> {
-    let keypair = crate::gen::gen_keypair()?;
+    has_keypass: bool,
+) -> Result<()> {
+    let keypair = crate::gen::gen_keypair(has_keypass)?;
     let mod_conf = move |old_conf: ClientConfig| ClientConfig {
         client_prikey: keypair.private,
+        has_keypass,
         ..old_conf
     };
     crate::gen::gen_client_binary(in_path.as_ref(), out_path.as_ref(), mod_conf)?;
@@ -92,7 +100,7 @@ pub fn modify_client_keypair<P: AsRef<Path>>(
 }
 
 /// read config from a existing client
-fn read_client_conf<P: AsRef<Path>>(path: P) -> Result<ClientConfig, Box<dyn Error>> {
+fn read_client_conf<P: AsRef<Path>>(path: P) -> Result<ClientConfig> {
     let file = OpenOptions::new().read(true).write(true).open(&path)?;
     let buf = unsafe { MmapOptions::new().map(&file) }?;
     let file = File::parse(&*buf)?;
@@ -102,16 +110,12 @@ fn read_client_conf<P: AsRef<Path>>(path: P) -> Result<ClientConfig, Box<dyn Err
         let conf = ClientConfig::from_slice(&buf[base..(base + CONF_BUF_LEN)])?;
         Ok(conf)
     } else {
-        Err("config not found")?
+        Err(anyhow!("config not found"))
     }
 }
 
 /// clone a client from existing one (analogy to Dolly the sheep)
-pub fn clone_client<P: AsRef<Path>>(
-    dna_path: P,
-    egg_path: P,
-    out_path: P,
-) -> Result<(), Box<dyn Error>> {
+pub fn clone_client<P: AsRef<Path>>(dna_path: P, egg_path: P, out_path: P) -> Result<()> {
     let dna = crate::gen::read_client_conf(&dna_path)?;
     crate::gen::gen_client_binary(egg_path.as_ref(), out_path.as_ref(), |_| dna)?;
     Ok(())
