@@ -57,7 +57,7 @@ where
 {
     // 1. crate new binary
     let new_exe = in_path.with_extension("tmp");
-    fs::copy(&in_path, &new_exe)?;
+    fs::copy(in_path, &new_exe)?;
     let file = OpenOptions::new().read(true).write(true).open(&new_exe)?;
     let mut buf = unsafe { MmapOptions::new().map_mut(&file) }?;
     let file = File::parse(&*buf)?;

@@ -7,7 +7,7 @@ use bincode::Options;
 use blake2::{Blake2s256, Digest};
 use chacha20poly1305::aead::{Aead, NewAead};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce}; // Or `XChaCha20Poly1305`
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, scalar::Scalar};
+use curve25519_dalek::EdwardsPoint;
 use log;
 use serde::{Deserialize, Serialize};
 use snowstorm::NoiseStream;
@@ -202,13 +202,11 @@ impl Client {
     /// list current client public key
     pub fn list_pubkey(server: bool) -> Result<()> {
         let conf = ClientConfig::from_slice(&CLIENT_CONF_BUF)?;
-        // derive pubkey
-        let privkey = Scalar::from_bits(
-            conf.client_prikey
-                .try_into()
-                .map_err(|_| anyhow!("Got invalid privkey when deriving pubkey"))?,
-        );
-        let point = (&ED25519_BASEPOINT_TABLE * &privkey).to_montgomery();
+        let bits = conf
+            .client_prikey
+            .try_into()
+            .map_err(|_| anyhow!("Got invalid privkey when deriving pubkey"))?;
+        let point = EdwardsPoint::mul_base_clamped(bits).to_montgomery();
         let pubkey = base64::encode(point.to_bytes());
         println!("Client pubkey: {:?}", pubkey);
         if server {
