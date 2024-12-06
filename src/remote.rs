@@ -1,66 +1,33 @@
 use std::{
     error::Error,
+    fmt,
     net::{AddrParseError, SocketAddr},
 };
 
 use serde::{Deserialize, Serialize};
 
-// untagged for unit variant of Enum
-// solution from <https://github.com/serde-rs/serde/issues/1560>
-// TODO: any better solutions ???
-macro_rules! named_unit_variant {
-    ($variant:ident) => {
-        pub mod $variant {
-            pub fn serialize<S>(serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                serializer.serialize_str(stringify!($variant))
-            }
-
-            pub fn deserialize<'de, D>(deserializer: D) -> Result<(), D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct V;
-                impl<'de> serde::de::Visitor<'de> for V {
-                    type Value = ();
-                    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                        f.write_str(concat!("\"", stringify!($variant), "\""))
-                    }
-                    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
-                        if value == stringify!($variant) {
-                            Ok(())
-                        } else {
-                            Err(E::invalid_value(serde::de::Unexpected::Str(value), &self))
-                        }
-                    }
-                }
-                deserializer.deserialize_str(V)
-            }
-        }
-    };
-}
-mod strings {
-    named_unit_variant!(socks5);
-}
-
 /// Type for target address
+/// for serialize https://github.com/serde-rs/serde/issues/1560#issuecomment-1666846833
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(rename_all = "camelCase")]
 pub enum Target {
-    /// target address is a socket address
-    Addr(SocketAddr),
     /// target address is builtin socks5
-    #[serde(with = "strings::socks5")]
     Socks5,
+    /// target address is a socket address
+    #[serde(untagged)]
+    Addr(SocketAddr),
 }
-impl ToString for Target {
-    fn to_string(&self) -> String {
-        match self {
-            Target::Addr(a) => a.to_string(),
-            Target::Socks5 => String::from("socks5"),
-        }
+
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Target::Addr(a) => a.to_string(),
+                Target::Socks5 => String::from("socks5"),
+            }
+        )
     }
 }
 
@@ -117,12 +84,16 @@ impl Remote {
     }
 }
 
-impl ToString for Remote {
-    fn to_string(&self) -> String {
-        match self {
-            Remote::Proxy(t) => t.to_string(),
-            Remote::Service(id) => format!("service (id: {})", id),
-            Remote::RProxy(t, _id) => t.to_string(),
-        }
+impl fmt::Display for Remote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Remote::Proxy(t) => t.to_string(),
+                Remote::Service(id) => format!("service (id: {})", id),
+                Remote::RProxy(t, _id) => t.to_string(),
+            }
+        )
     }
 }

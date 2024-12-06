@@ -10,10 +10,14 @@ use blake2::{Blake2s256, Digest};
 use dashmap::DashMap;
 use log;
 use serde::{Deserialize, Serialize};
-use snowstorm::NoiseStream;
+use snowstorm::{NoiseStream, SnowstormError};
+use std::time::Duration;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::timeout;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
 use crate::client::ClientConfig;
 use crate::consts::{FILEHASH_LEN, PATTERN};
@@ -303,10 +307,20 @@ impl Server {
         let responder = snowstorm::Builder::new(PATTERN.parse()?)
             .local_private_key(&self.config.prikey)
             .build_responder()?;
-        let enc_inbound = NoiseStream::handshake_with_verifier(inbound, responder, |key| {
-            self.config.clients.contains(key)
-        })
-        .await?;
+
+        let handshake = NoiseStream::handshake_with_verifier(inbound, responder, |key| {
+            if self.config.clients.contains(key) {
+                Ok(())
+            } else {
+                Err(SnowstormError::InvalidPublicKey(key.to_vec()))
+            }
+        });
+        let enc_inbound = match timeout(HANDSHAKE_TIMEOUT, handshake).await {
+            Ok(r) => r?,
+            Err(_) => Err(snowstorm::SnowstormError::HandshakeError(String::from(
+                "handshake timeout",
+            )))?,
+        };
         Ok(enc_inbound)
     }
     async fn try_handshake(
